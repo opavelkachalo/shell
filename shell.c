@@ -87,6 +87,11 @@ struct word_item *tokenize_line(char *line, int *status)
             }
         }
         if(*c == '"' && !escaped) {
+            if(!is_word && c[1] == '"' && (c[2] == ' ' || c[2] == '\0')) {
+                is_word = 1;
+                c++;
+                continue;
+            }
             in_quots = !in_quots;
             continue;
         }
