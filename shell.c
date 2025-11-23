@@ -1,6 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+enum {
+    word_init_size   = 4,
+    line_init_size   = 16,
+    code_succ        = 0,
+    code_quot_msmtch = 1,
+};
+
 struct word_item {
     char *word;
     struct word_item *next;
@@ -16,7 +23,7 @@ void wlist_append(struct word_item **first, struct word_item **last,
     if(*last)
         (*last)->next = tmp;
     else
-        (*first) = tmp;
+        *first = tmp;
     *last = tmp;
 }
 
@@ -31,13 +38,6 @@ void wlist_free(struct word_item *wlist)
     }
 }
 
-enum {
-    word_init_size   = 4,
-    line_init_size   = 16,
-    code_succ        = 0,
-    code_quot_msmtch = 1,
-};
-
 char *dstr_init(int *pos, int *size, int initsize)
 {
     *pos = 0;
@@ -47,7 +47,7 @@ char *dstr_init(int *pos, int *size, int initsize)
 
 void dstr_append(char **dstr, char c, int *pos, int *size)
 {
-    if(*pos >= *size) {
+    if(*pos == *size) {
         *size *= 2;
         *dstr = realloc(*dstr, *size);
     }
@@ -55,48 +55,49 @@ void dstr_append(char **dstr, char c, int *pos, int *size)
     (*pos)++;
 }
 
-int is_delimiter(char c)
+int is_whitespace(char c)
 {
     return c == ' ' || c == '\t';
+}
+
+void add_word(char **word, int *pos, int *size, struct word_item **first,
+              struct word_item **last)
+{
+    dstr_append(word, '\0', pos, size);
+    wlist_append(first, last, *word);
 }
 
 struct word_item *tokenize_line(char *line, int *status)
 {
     char *c, *word;
-    int wsize, wpos, in_quots, is_word;
-    struct word_item *wlist, *last;
-    wlist = NULL;
-    last = NULL;
+    int wsize, wpos, in_quots = 0, is_word = 0, escaped = 0;
+    struct word_item *wlist = NULL, *last = NULL;
     word = dstr_init(&wpos, &wsize, word_init_size);
-    in_quots = 0;
-    is_word = 0;
     for(c = line; *c; c++) {
-        if(is_delimiter(*c) && !in_quots) {
-            if(is_word) {
-                is_word = 0;
-                dstr_append(&word, '\0', &wpos, &wsize);
-                wlist_append(&wlist, &last, word);
-                word = dstr_init(&wpos, &wsize, word_init_size);
+        if(is_whitespace(*c) && !in_quots && is_word) {
+            is_word = 0;
+            add_word(&word, &wpos, &wsize, &wlist, &last);
+            word = dstr_init(&wpos, &wsize, word_init_size);
+            continue;
+        }
+        if(*c == '\\' && !escaped) {
+            if(c[1] == '\\' || c[1] == '"') {
+                escaped = 1;
                 continue;
             }
         }
-        if(*c == '"') {
+        if(*c == '"' && !escaped) {
             in_quots = !in_quots;
             continue;
         }
-        if(!is_word && (!is_delimiter(*c) || in_quots))
+        if(!is_word && (!is_whitespace(*c) || in_quots))
             is_word = 1;
         if(is_word)
             dstr_append(&word, *c, &wpos, &wsize);
     }
-    if(is_word) {
-        dstr_append(&word, '\0', &wpos, &wsize);
-        wlist_append(&wlist, &last, word);
-    }
-    if(in_quots)
-        *status = code_quot_msmtch;
-    else
-        *status = code_succ;
+    if(is_word)
+        add_word(&word, &wpos, &wsize, &wlist, &last);
+    *status = in_quots ? code_quot_msmtch : code_succ;
     return wlist;
 }
 
