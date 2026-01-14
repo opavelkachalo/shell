@@ -1,5 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <string.h>
 
 enum {
     word_init_size   = 4,
@@ -7,6 +11,8 @@ enum {
     code_succ        = 0,
     code_quot_msmtch = 1,
 };
+
+#define SELF_NAME "shell"
 
 struct word_item {
     char *word;
@@ -27,11 +33,20 @@ void wlist_append(struct word_item **first, struct word_item **last,
     *last = tmp;
 }
 
+int wlist_len(struct word_item *wlist)
+{
+    int len;
+    struct word_item *tmp;
+    len = 0;
+    for(tmp = wlist; tmp; tmp = tmp->next)
+        len++;
+    return len;
+}
+
 void wlist_free(struct word_item *wlist)
 {
-    struct word_item *tmp;
     while(wlist) {
-        tmp = wlist;
+        struct word_item *tmp = wlist;
         wlist = wlist->next;
         free(tmp->word);
         free(tmp);
@@ -125,6 +140,115 @@ void print_words(struct word_item *wlist, FILE *fileout)
         fprintf(fileout, "[%s]\n", item->word);
 }
 
+char **wlist2arr(struct word_item *wlist)
+{
+    int len, i;
+    char **arr;
+    struct word_item *tmp;
+
+    len = wlist_len(wlist) + 1;  /* +1 is for the NULL at the end */
+    if(len == 1)
+        return NULL;
+    arr = malloc(len * sizeof(*arr));
+    tmp = wlist;
+    for(i = 0; i < len-1; i++) {
+        arr[i] = tmp->word;
+        tmp = tmp->next;
+    }
+    arr[len-1] = NULL;
+    return arr;
+}
+
+char *builtins[] = {
+    "cd",
+    /* more builtin commands to come... */
+};
+
+int is_builtin(const char *cmd)
+{
+    int blen, i;
+    blen = sizeof(builtins) / sizeof(*builtins);
+    for(i = 0; i < blen; i++)
+        if(0 == strcmp(builtins[i], cmd))
+            return 1;
+    return 0;
+}
+
+int len_argv(char **argv)
+{
+    char **arg;
+    for(arg = argv; *arg; arg++)
+        {}
+    return arg - argv;
+}
+
+void cd(char **argv)
+{
+    int res, len;
+    char *path, *old_path;
+    len = len_argv(argv);
+    if(len > 2) {
+        fprintf(stderr, "%s: cd: too many arguments\n", SELF_NAME);
+        return;
+    } else if(len == 2) {
+        if(0 == strcmp(argv[1], "-")) {
+            path = getenv("OLDPWD");
+            if(!path) {
+                fprintf(stderr, "%s: cd: OLDPWD not set\n", SELF_NAME);
+                return;
+            }
+        } else
+            path = argv[1];
+    } else {
+        path = getenv("HOME");
+        if(!path) {
+            fprintf(stderr, "%s: cd: HOME not set\n", SELF_NAME);
+            return;
+        }
+    }
+    old_path = getenv("PWD");
+    res = chdir(path);
+    if(res == -1) {
+        fprintf(stderr, "%s: cd: %s: %s\n", SELF_NAME, path,
+                strerror(errno));
+        return;
+    }
+    setenv("OLDPWD", old_path, 1);
+}
+
+void run_builtin(char **argv)
+{
+    if(0 == strcmp(argv[0], "cd")) {
+        cd(argv);
+    }
+    /* more builtin commands to come... */
+}
+
+void exec_cmd(struct word_item *wlist)
+{
+    int pid;
+    char **cmd;
+    if(!wlist)
+        return;
+    cmd = wlist2arr(wlist);
+    if(is_builtin(cmd[0])) {
+        run_builtin(cmd);
+        return;
+    }
+    pid = fork();
+    if(pid == 0) {
+        execvp(cmd[0], cmd);
+        if(errno == ENOENT)
+            fprintf(stderr, "%s: %s: command not found\n",
+                    SELF_NAME, cmd[0]);
+        else
+            perror(cmd[0]);
+        exit(69);
+    }
+    wait(NULL);
+    free(cmd);
+}
+
 void print_error_msg(int status)
 {
     switch(status) {
@@ -150,7 +274,8 @@ void read_lines(FILE *filein, FILE *fileout)
             dstr_append(&line, '\0', &pos, &size);
             wlist = tokenize_line(line, &status);
             if(status == code_succ)
-                print_words(wlist, fileout);
+                /* print_words(wlist, fileout); */
+                exec_cmd(wlist);
             else
                 print_error_msg(status);
             wlist_free(wlist);
