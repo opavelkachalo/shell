@@ -82,17 +82,50 @@ void add_word(char **word, int *pos, int *size, struct word_item **first,
     wlist_append(first, last, *word);
 }
 
+int is_delimiter(char c)
+{
+    return c == '&' || c == '>' || c == '<' || c == '|' || c == ';' ||
+           c == '(' || c == ')';
+}
+
+int delimiter_len(char *c)
+{
+    /* 1 or 2
+       & > < | ; ( )
+       >> && ||
+    */
+    if(*c == c[1] && (*c == '>' || *c == '&' || *c == '|'))
+        return 2;
+    return 1;
+}
+
 struct word_item *tokenize_line(char *line, int *status)
 {
     char *c, *word;
     int wsize, wpos, in_quots = 0, is_word = 0, escaped = 0;
-    struct word_item *wlist = NULL, *last = NULL;
+    struct word_item *wlist = NULL, *wlast = NULL;
     word = dstr_init(&wpos, &wsize, word_init_size);
     for(c = line; *c; c++) {
         if(is_whitespace(*c) && !in_quots && is_word) {
             is_word = 0;
-            add_word(&word, &wpos, &wsize, &wlist, &last);
+            add_word(&word, &wpos, &wsize, &wlist, &wlast);
             word = dstr_init(&wpos, &wsize, word_init_size);
+            continue;
+        }
+        if(!in_quots && is_delimiter(*c)) {
+            int dlen, i;
+            dlen = delimiter_len(c);
+            if(wpos != 0) {
+                add_word(&word, &wpos, &wsize, &wlist, &wlast);
+                word = dstr_init(&wpos, &wsize, dlen+1);
+            }
+            for(i = 0; i < dlen; i++)
+                dstr_append(&word, c[i], &wpos, &wsize);
+            add_word(&word, &wpos, &wsize, &wlist, &wlast);
+            if(c[dlen])
+                word = dstr_init(&wpos, &wsize, word_init_size);
+            c += dlen-1;
+            is_word = 0;
             continue;
         }
         if(*c == '\\' && !escaped) {
@@ -110,13 +143,14 @@ struct word_item *tokenize_line(char *line, int *status)
             in_quots = !in_quots;
             continue;
         }
+        escaped = 0;
         if(!is_word && (!is_whitespace(*c) || in_quots))
             is_word = 1;
         if(is_word)
             dstr_append(&word, *c, &wpos, &wsize);
     }
     if(is_word)
-        add_word(&word, &wpos, &wsize, &wlist, &last);
+        add_word(&word, &wpos, &wsize, &wlist, &wlast);
     *status = in_quots ? code_quot_msmtch : code_succ;
     return wlist;
 }
@@ -274,8 +308,8 @@ void read_lines(FILE *filein, FILE *fileout)
             dstr_append(&line, '\0', &pos, &size);
             wlist = tokenize_line(line, &status);
             if(status == code_succ)
-                /* print_words(wlist, fileout); */
-                exec_cmd(wlist);
+                print_words(wlist, fileout);
+                /* exec_cmd(wlist); */
             else
                 print_error_msg(status);
             wlist_free(wlist);
