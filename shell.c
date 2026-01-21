@@ -14,23 +14,31 @@ enum {
 
 #define SELF_NAME "shell"
 
+enum token_type { token_word, token_delimiter };
+
 struct word_item {
     char *word;
+    enum token_type t_type;
     struct word_item *next;
 };
 
-void wlist_append(struct word_item **first, struct word_item **last,
-                  char *word)
+struct word_list {
+    struct word_item *first, *last;
+};
+
+void wlist_append(struct word_list *wlist, char *word,
+                  enum token_type t_type)
 {
     struct word_item *tmp;
     tmp = malloc(sizeof(*tmp));
     tmp->word = word;
+    tmp->t_type = t_type;
     tmp->next = NULL;
-    if(*last)
-        (*last)->next = tmp;
+    if(wlist->last)
+        wlist->last->next = tmp;
     else
-        *first = tmp;
-    *last = tmp;
+        wlist->first = tmp;
+    wlist->last = tmp;
 }
 
 int wlist_len(struct word_item *wlist)
@@ -53,21 +61,26 @@ void wlist_free(struct word_item *wlist)
     }
 }
 
-char *dstr_init(int *pos, int *size, int initsize)
+struct dyn_str {
+    int pos, size;
+    char *str;
+};
+
+void dstr_init(struct dyn_str *dstr, int initsize)
 {
-    *pos = 0;
-    *size = initsize;
-    return malloc(*size);
+    dstr->pos = 0;
+    dstr->size = initsize;
+    dstr->str = malloc(initsize);
 }
 
-void dstr_append(char **dstr, char c, int *pos, int *size)
+void dstr_append(struct dyn_str *dstr, char c)
 {
-    if(*pos == *size) {
-        *size *= 2;
-        *dstr = realloc(*dstr, *size);
+    if(dstr->pos == dstr->size) {
+        dstr->size *= 2;
+        dstr->str = realloc(dstr->str, dstr->size);
     }
-    (*dstr)[*pos] = c;
-    (*pos)++;
+    (dstr->str)[dstr->pos] = c;
+    (dstr->pos)++;
 }
 
 int is_whitespace(char c)
@@ -75,11 +88,11 @@ int is_whitespace(char c)
     return c == ' ' || c == '\t';
 }
 
-void add_word(char **word, int *pos, int *size, struct word_item **first,
-              struct word_item **last)
+void add_word_to_wlist(struct dyn_str *dstr, struct word_list *wlist,
+              enum token_type t_type)
 {
-    dstr_append(word, '\0', pos, size);
-    wlist_append(first, last, *word);
+    dstr_append(dstr, '\0');
+    wlist_append(wlist, dstr->str, t_type);
 }
 
 int is_delimiter(char c)
@@ -99,60 +112,62 @@ int delimiter_len(char *c)
     return 1;
 }
 
+void add_delimiter_to_wlist(char **c, struct dyn_str *dword,
+                            struct word_list *wlist)
+{
+    int dlen, i;
+    dlen = delimiter_len(*c);
+    /* finish and add current word to the wlist */
+    if(dword->pos != 0) {
+        add_word_to_wlist(dword, wlist, token_word);
+        dstr_init(dword, dlen+1);
+    }
+    /* copy delimiter to the dword and add it to the wlist */
+    for(i = 0; i < dlen; i++)
+        dstr_append(dword, (*c)[i]);
+    add_word_to_wlist(dword, wlist, token_delimiter);
+    /* init another word if it's not the end of line */
+    if((*c)[dlen])
+        dstr_init(dword, word_init_size);
+    (*c) += dlen-1;
+}
+
 struct word_item *tokenize_line(char *line, int *status)
 {
-    char *c, *word;
-    int wsize, wpos, in_quots = 0, is_word = 0, escaped = 0;
-    struct word_item *wlist = NULL, *wlast = NULL;
-    word = dstr_init(&wpos, &wsize, word_init_size);
+    char *c;
+    struct dyn_str dword;
+    int in_quots = 0, is_word = 0, escaped = 0;
+    struct word_list wlist = { NULL, NULL };
+    dstr_init(&dword, word_init_size);
     for(c = line; *c; c++) {
         if(is_whitespace(*c) && !in_quots && is_word) {
+            add_word_to_wlist(&dword, &wlist, token_word);
+            dstr_init(&dword, word_init_size);
             is_word = 0;
-            add_word(&word, &wpos, &wsize, &wlist, &wlast);
-            word = dstr_init(&wpos, &wsize, word_init_size);
-            continue;
-        }
-        if(!in_quots && is_delimiter(*c)) {
-            int dlen, i;
-            dlen = delimiter_len(c);
-            if(wpos != 0) {
-                add_word(&word, &wpos, &wsize, &wlist, &wlast);
-                word = dstr_init(&wpos, &wsize, dlen+1);
-            }
-            for(i = 0; i < dlen; i++)
-                dstr_append(&word, c[i], &wpos, &wsize);
-            add_word(&word, &wpos, &wsize, &wlist, &wlast);
-            if(c[dlen])
-                word = dstr_init(&wpos, &wsize, word_init_size);
-            c += dlen-1;
+        } else if(!in_quots && is_delimiter(*c)) {
+            add_delimiter_to_wlist(&c, &dword, &wlist);
             is_word = 0;
-            continue;
-        }
-        if(*c == '\\' && !escaped) {
-            if(c[1] == '\\' || c[1] == '"') {
-                escaped = 1;
-                continue;
-            }
-        }
-        if(*c == '"' && !escaped) {
+        } else if(*c == '\\' && !escaped && (c[1] == '\\' || c[1] == '"')) {
+            escaped = 1;
+        } else if(*c == '"' && !escaped) {
+            /* creating an empty word */
             if(!is_word && c[1] == '"' && (c[2] == ' ' || c[2] == '\0')) {
                 is_word = 1;
                 c++;
-                continue;
-            }
-            in_quots = !in_quots;
-            continue;
+            } else
+                in_quots = !in_quots;
+        } else {
+            if(!is_word && (!is_whitespace(*c) || in_quots))
+                is_word = 1;
+            if(is_word)
+                dstr_append(&dword, *c);
+            escaped = 0;
         }
-        escaped = 0;
-        if(!is_word && (!is_whitespace(*c) || in_quots))
-            is_word = 1;
-        if(is_word)
-            dstr_append(&word, *c, &wpos, &wsize);
     }
     if(is_word)
-        add_word(&word, &wpos, &wsize, &wlist, &wlast);
+        add_word_to_wlist(&dword, &wlist, token_word);
     *status = in_quots ? code_quot_msmtch : code_succ;
-    return wlist;
+    return wlist.first;
 }
 
 void print_prompt(FILE *filein, FILE *fileout)
@@ -171,7 +186,8 @@ void print_words(struct word_item *wlist, FILE *fileout)
 {
     struct word_item *item;
     for(item = wlist; item; item = item->next)
-        fprintf(fileout, "[%s]\n", item->word);
+        fprintf(fileout, "[%s] (%s)\n", item->word,
+            item->t_type == token_word ? "w" : "d");
 }
 
 char **wlist2arr(struct word_item *wlist)
@@ -179,7 +195,6 @@ char **wlist2arr(struct word_item *wlist)
     int len, i;
     char **arr;
     struct word_item *tmp;
-
     len = wlist_len(wlist) + 1;  /* +1 is for the NULL at the end */
     if(len == 1)
         return NULL;
@@ -258,7 +273,7 @@ void run_builtin(char **argv)
     /* more builtin commands to come... */
 }
 
-void exec_cmd(struct word_item *wlist)
+void eval(struct word_item *wlist)
 {
     int pid;
     char **cmd;
@@ -296,31 +311,31 @@ void print_error_msg(int status)
 
 void read_lines(FILE *filein, FILE *fileout)
 {
-    int c, pos, size;
-    char *line;
+    int c;
+    struct dyn_str dline;
     struct word_item *wlist;
-    line = dstr_init(&pos, &size, line_init_size);
+    dstr_init(&dline, line_init_size);
     wlist = NULL;
     print_prompt(filein, fileout);
     while((c = fgetc(filein)) != EOF) {
         if(c == '\n') {
             int status;
-            dstr_append(&line, '\0', &pos, &size);
-            wlist = tokenize_line(line, &status);
+            dstr_append(&dline, '\0');
+            wlist = tokenize_line(dline.str, &status);
             if(status == code_succ)
                 print_words(wlist, fileout);
-                /* exec_cmd(wlist); */
+                /* eval(wlist); */
             else
                 print_error_msg(status);
             wlist_free(wlist);
-            pos = 0;
+            dline.pos = 0;
             print_prompt(filein, fileout);
             continue;
         }
-        dstr_append(&line, c, &pos, &size);
+        dstr_append(&dline, c);
     }
     close_prompt(filein, fileout);
-    free(line);
+    free(dline.str);
 }
 
 int main()
