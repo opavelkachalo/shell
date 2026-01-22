@@ -167,6 +167,8 @@ struct word_item *tokenize_line(char *line, int *status)
     if(is_word)
         add_word_to_wlist(&dword, &wlist, token_word);
     *status = in_quots ? code_quot_msmtch : code_succ;
+    if(!wlist.first)
+        free(dword.str);
     return wlist.first;
 }
 
@@ -186,8 +188,7 @@ void print_words(struct word_item *wlist, FILE *fileout)
 {
     struct word_item *item;
     for(item = wlist; item; item = item->next)
-        fprintf(fileout, "[%s] (%s)\n", item->word,
-            item->t_type == token_word ? "w" : "d");
+        fprintf(fileout, "[%s]\n", item->word);
 }
 
 char **wlist2arr(struct word_item *wlist)
@@ -273,18 +274,24 @@ void run_builtin(char **argv)
     /* more builtin commands to come... */
 }
 
-void eval(struct word_item *wlist)
+void remove_zombies()
 {
-    int pid;
-    char **cmd;
-    if(!wlist)
-        return;
-    cmd = wlist2arr(wlist);
-    if(is_builtin(cmd[0])) {
-        run_builtin(cmd);
-        return;
-    }
+    int p;
+    do {
+        p = wait4(-1, NULL, WNOHANG, NULL);
+    } while(p > 0);
+}
+
+struct cmd_props {
+    int run_in_bg;
+};
+
+void exec_cmd(char **cmd, struct cmd_props *cmdp)
+{
+    int pid, p;
     pid = fork();
+    if(cmdp->run_in_bg)
+        remove_zombies();
     if(pid == 0) {
         execvp(cmd[0], cmd);
         if(errno == ENOENT)
@@ -294,7 +301,54 @@ void eval(struct word_item *wlist)
             perror(cmd[0]);
         exit(69);
     }
-    wait(NULL);
+    if(!cmdp->run_in_bg) {
+        do {
+            p = wait(NULL);
+        } while(p != pid);
+    }
+}
+
+int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
+{
+    struct word_item **tmp;
+    cmdp->run_in_bg = 0;
+    for(tmp = wlist; *tmp; tmp = &(*tmp)->next) {
+        if((*tmp)->t_type != token_delimiter)
+            continue;
+        if(0 == strcmp("&", (*tmp)->word)) {
+            if(!(*tmp)->next) {
+                cmdp->run_in_bg = 1;
+                free((*tmp)->word);
+                free(*tmp);
+                *tmp = NULL;
+                break;
+            } else {
+                fprintf(stderr, "& must be the last symbol in the line\n");
+                return -1;
+            }
+        } else {
+            fprintf(stderr, "Feature is not implemented yet\n");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void eval(struct word_item **wlist)
+{
+    int res;
+    char **cmd;
+    struct cmd_props cmdp;
+    res = analyze_expression(wlist, &cmdp);
+    if(res == -1)
+        return;
+    cmd = wlist2arr(*wlist);
+    if(is_builtin(cmd[0])) {
+        run_builtin(cmd);
+        goto cleanup;
+    }
+    exec_cmd(cmd, &cmdp);
+cleanup:
     free(cmd);
 }
 
@@ -322,14 +376,15 @@ void read_lines(FILE *filein, FILE *fileout)
             int status;
             dstr_append(&dline, '\0');
             wlist = tokenize_line(dline.str, &status);
-            if(status == code_succ)
-                print_words(wlist, fileout);
-                /* eval(wlist); */
+            if(status == code_succ && wlist)
+                /* print_words(wlist, fileout); */
+                eval(&wlist);
             else
                 print_error_msg(status);
             wlist_free(wlist);
             dline.pos = 0;
             print_prompt(filein, fileout);
+            remove_zombies();
             continue;
         }
         dstr_append(&dline, c);
