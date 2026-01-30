@@ -4,6 +4,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <string.h>
+#include <fcntl.h>
 
 enum {
     word_init_size   = 4,
@@ -175,7 +176,7 @@ struct word_item *tokenize_line(char *line, int *status)
 void print_prompt(FILE *filein, FILE *fileout)
 {
     if(filein == stdin)
-        fputs("> ", fileout);
+        fputs("% ", fileout);
 }
 
 void close_prompt(FILE *filein, FILE *fileout)
@@ -274,6 +275,69 @@ void run_builtin(char **argv)
     /* more builtin commands to come... */
 }
 
+struct cmd_props {
+    int run_in_bg, append_f, redir_in_cnt, redir_out_cnt;
+    char *filein, *fileout;
+};
+
+void cmdp_init(struct cmd_props *cmdp)
+{
+    cmdp->run_in_bg = 0;
+    cmdp->append_f = 0;
+    cmdp->redir_in_cnt = 0;
+    cmdp->redir_out_cnt = 0;
+    cmdp->filein = NULL;
+    cmdp->fileout = NULL;
+}
+
+int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
+                          int append_f)
+{
+    int fd, flags;
+    if(stdfd == 0) {
+        flags = O_RDONLY;
+    } else {
+        flags = O_WRONLY | O_CREAT;
+        flags |= append_f ? O_APPEND : O_TRUNC;
+    }
+    fd = open(fname, flags, 0666);
+    if(fd == -1) {
+        perror(fname);
+        return -1;
+    }
+    *fdcopy_ptr = dup(stdfd);
+    dup2(fd, stdfd);
+    close(fd);
+    return 0;
+}
+
+int redirect_streams(struct cmd_props *cmdp, int *fdcopy_ptr0,
+                     int *fdcopy_ptr1)
+{
+    int res = 0;
+    if(cmdp->filein)
+        res = redirect_stdio_stream(0, cmdp->filein, fdcopy_ptr0,
+                                    cmdp->append_f);
+    if(res == -1)
+        return res;
+    if(cmdp->fileout)
+        res = redirect_stdio_stream(1, cmdp->fileout, fdcopy_ptr1,
+                                    cmdp->append_f);
+    return res;
+}
+
+void restore_streams(struct cmd_props *cmdp, int fdcopy0, int fdcopy1)
+{
+    if(cmdp->filein) {
+        dup2(fdcopy0, 0);
+        close(fdcopy0);
+    }
+    if(cmdp->fileout) {
+        dup2(fdcopy1, 1);
+        close(fdcopy1);
+    }
+}
+
 void remove_zombies()
 {
     int p;
@@ -282,16 +346,27 @@ void remove_zombies()
     } while(p > 0);
 }
 
-struct cmd_props {
-    int run_in_bg;
-};
+void wait_fg_process(int pid)
+{
+    int p;
+    do {
+        p = wait(NULL);
+    } while(p != pid);
+}
 
 void exec_cmd(char **cmd, struct cmd_props *cmdp)
 {
-    int pid, p;
-    pid = fork();
+    int pid, cp0, cp1, res;
     if(cmdp->run_in_bg)
         remove_zombies();
+    res = redirect_streams(cmdp, &cp0, &cp1);
+    if(res == -1)
+        return;
+    pid = fork();
+    if(pid == -1) {
+        perror(SELF_NAME);
+        return;
+    }
     if(pid == 0) {
         execvp(cmd[0], cmd);
         if(errno == ENOENT)
@@ -301,37 +376,89 @@ void exec_cmd(char **cmd, struct cmd_props *cmdp)
             perror(cmd[0]);
         exit(69);
     }
-    if(!cmdp->run_in_bg) {
-        do {
-            p = wait(NULL);
-        } while(p != pid);
+    if(!cmdp->run_in_bg)
+        wait_fg_process(pid);
+    restore_streams(cmdp, cp0, cp1);
+}
+
+void add_redir_info_to_cmdprops(struct cmd_props *cmdp,
+                                struct word_item *cur)
+{
+    char *cur_word, *redir_file;
+    cur_word = cur->word;
+    redir_file = cur->next->word;
+    if(cur_word[0] == '<') {
+        cmdp->filein = redir_file;
+        cmdp->redir_in_cnt++;
+    } else {
+        cmdp->fileout = redir_file;
+        cmdp->redir_out_cnt++;
+        if(cur_word[1] == '>')
+            cmdp->append_f = 1;
     }
+}
+
+void delete_word_item(struct word_item **pcur, int free_word_f)
+{
+    struct word_item *tmp;
+    tmp = *pcur;
+    if(free_word_f)
+        free(tmp->word);
+    *pcur = tmp->next;
+    free(tmp);
 }
 
 int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
 {
-    struct word_item **tmp;
-    cmdp->run_in_bg = 0;
-    for(tmp = wlist; *tmp; tmp = &(*tmp)->next) {
-        if((*tmp)->t_type != token_delimiter)
+    struct word_item **pcur;
+    pcur = wlist;
+    while(*pcur) {
+        char *s = (*pcur)->word;
+        if((*pcur)->t_type != token_delimiter) {
+            pcur = &(*pcur)->next;
             continue;
-        if(0 == strcmp("&", (*tmp)->word)) {
-            if(!(*tmp)->next) {
+        }
+        if(*s == '&') {
+            if(!(*pcur)->next) {
                 cmdp->run_in_bg = 1;
-                free((*tmp)->word);
-                free(*tmp);
-                *tmp = NULL;
-                break;
+                delete_word_item(pcur, 1);
             } else {
                 fprintf(stderr, "& must be the last symbol in the line\n");
                 return -1;
             }
+        } else
+        if(*s == '<' || *s == '>') {
+            if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
+                fprintf(stderr, "File name expected after `%s'\n", s);
+                return -1;
+            }
+            add_redir_info_to_cmdprops(cmdp, *pcur);
+            if(cmdp->redir_in_cnt >= 2 || cmdp->redir_out_cnt >= 2) {
+                fprintf(stderr, "Ambigous redirection\n");
+                return -1;
+            }
+            delete_word_item(pcur, 1);
+            delete_word_item(pcur, 0);
+            continue;
         } else {
             fprintf(stderr, "Feature is not implemented yet\n");
             return -1;
         }
+        if(*pcur)
+            pcur = &(*pcur)->next;
     }
     return 0;
+}
+
+void make_empty_file(const char *path)
+{
+    int fd;
+    fd = open(path, O_CREAT|O_TRUNC, 0666);
+    if(fd == -1) {
+        perror(path);
+        return;
+    }
+    close(fd);
 }
 
 void eval(struct word_item **wlist)
@@ -339,9 +466,17 @@ void eval(struct word_item **wlist)
     int res;
     char **cmd;
     struct cmd_props cmdp;
+    cmd = NULL;
+    cmdp_init(&cmdp);
     res = analyze_expression(wlist, &cmdp);
     if(res == -1)
-        return;
+        goto cleanup;
+    if(!*wlist) {
+        /* truncate file if cmd is `>file' */
+        if(cmdp.fileout && !cmdp.append_f)
+            make_empty_file(cmdp.fileout);
+        goto cleanup;
+    }
     cmd = wlist2arr(*wlist);
     if(is_builtin(cmd[0])) {
         run_builtin(cmd);
@@ -349,7 +484,12 @@ void eval(struct word_item **wlist)
     }
     exec_cmd(cmd, &cmdp);
 cleanup:
-    free(cmd);
+    if(cmdp.filein)
+        free(cmdp.filein);
+    if(cmdp.fileout)
+        free(cmdp.fileout);
+    if(cmd)
+        free(cmd);
 }
 
 void print_error_msg(int status)
@@ -381,7 +521,8 @@ void read_lines(FILE *filein, FILE *fileout)
                 eval(&wlist);
             else
                 print_error_msg(status);
-            wlist_free(wlist);
+            if(wlist)
+                wlist_free(wlist);
             dline.pos = 0;
             print_prompt(filein, fileout);
             remove_zombies();
