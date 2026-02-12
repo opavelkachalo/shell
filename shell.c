@@ -213,6 +213,7 @@ char **wlist2arr(struct word_item *wlist)
 
 char *builtins[] = {
     "cd",
+    "exit",
     /* more builtin commands to come... */
 };
 
@@ -268,10 +269,55 @@ void cd(char **argv)
     setenv("OLDPWD", old_path, 1);
 }
 
+int str_to_int(const char *str, int *ok)
+{
+    int res = 0, sign = 0;
+    const char *p;
+    if(*str == '-') {
+        sign = 1;
+        p = str + 1;
+    } else
+        p = str;
+    for(; *p; p++) {
+        if(*p < '0' || *p > '9') {
+            if(ok)
+                *ok = 0;
+            return 0;
+        }
+        /* no checks for overflow */
+        res = res * 10 + *p - '0';
+    }
+    if(ok)
+        *ok = 1;
+    return sign ? -res : res;
+}
+
+void exit_cmd(char **argv)
+{
+    int code, len, ok;
+    code = 0;
+    len = len_argv(argv);
+    if(len > 2) {
+        fprintf(stderr, "%s: exit: too many arguments\n", SELF_NAME);
+        return;
+    } else
+    if(len == 2) {
+        code = str_to_int(argv[1], &ok);
+        if(!ok) {
+            fprintf(stderr, "%s: exit: %s: numeric argument required\n", SELF_NAME, argv[1]);
+            return;
+        }
+    }
+    exit(code);
+}
+
 void run_builtin(char **argv)
 {
     if(0 == strcmp(argv[0], "cd")) {
         cd(argv);
+    } else
+    if(0 == strcmp(argv[0], "exit")) {
+        exit_cmd(argv);
     }
     /* more builtin commands to come... */
 }
