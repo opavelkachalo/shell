@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <string.h>
 #include <fcntl.h>
+#include <signal.h>
 
 enum {
     word_init_size   = 4,
@@ -338,9 +339,10 @@ void restore_streams(struct cmd_props *cmdp, int fdcopy0, int fdcopy1)
     }
 }
 
-void remove_zombies()
+void remove_zombies(int s)
 {
     int p;
+    signal(SIGCHLD, remove_zombies);
     do {
         p = wait4(-1, NULL, WNOHANG, NULL);
     } while(p > 0);
@@ -357,8 +359,6 @@ void wait_fg_process(int pid)
 void exec_cmd(char **cmd, struct cmd_props *cmdp)
 {
     int pid, cp0, cp1, res;
-    if(cmdp->run_in_bg)
-        remove_zombies();
     res = redirect_streams(cmdp, &cp0, &cp1);
     if(res == -1)
         return;
@@ -376,8 +376,11 @@ void exec_cmd(char **cmd, struct cmd_props *cmdp)
             perror(cmd[0]);
         exit(69);
     }
-    if(!cmdp->run_in_bg)
+    if(!cmdp->run_in_bg) {
+        signal(SIGCHLD, SIG_DFL);
         wait_fg_process(pid);
+        signal(SIGCHLD, remove_zombies);
+    }
     restore_streams(cmdp, cp0, cp1);
 }
 
@@ -525,7 +528,6 @@ void read_lines(FILE *filein, FILE *fileout)
                 wlist_free(wlist);
             dline.pos = 0;
             print_prompt(filein, fileout);
-            remove_zombies();
             continue;
         }
         dstr_append(&dline, c);
@@ -536,6 +538,7 @@ void read_lines(FILE *filein, FILE *fileout)
 
 int main()
 {
+    signal(SIGCHLD, remove_zombies);
     read_lines(stdin, stdout);
     return 0;
 }
