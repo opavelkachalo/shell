@@ -174,25 +174,6 @@ struct word_item *tokenize_line(char *line, int *status)
     return wlist.first;
 }
 
-void print_prompt(FILE *filein, FILE *fileout)
-{
-    if(filein == stdin)
-        fputs("% ", fileout);
-}
-
-void close_prompt(FILE *filein, FILE *fileout)
-{
-    if(filein == stdin)
-        fputc('\n', fileout);
-}
-
-void print_words(struct word_item *wlist, FILE *fileout)
-{
-    struct word_item *item;
-    for(item = wlist; item; item = item->next)
-        fprintf(fileout, "[%s]\n", item->word);
-}
-
 char **wlist2arr(struct word_item *wlist)
 {
     int len, i;
@@ -294,6 +275,9 @@ int str_to_int(const char *str, int *ok)
 
 void exit_cmd(char **argv)
 {
+    /* there is a minor memory leak caused by this function
+     * (wlist and cmd are not being released)
+     * but it's not a big deal, because program finishes here anyway */
     int code, len, ok;
     code = 0;
     len = len_argv(argv);
@@ -304,7 +288,8 @@ void exit_cmd(char **argv)
     if(len == 2) {
         code = str_to_int(argv[1], &ok);
         if(!ok) {
-            fprintf(stderr, "%s: exit: %s: numeric argument required\n", SELF_NAME, argv[1]);
+            fprintf(stderr, "%s: exit: %s: numeric argument required\n",
+                    SELF_NAME, argv[1]);
             return;
         }
     }
@@ -486,6 +471,7 @@ int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
                 fprintf(stderr, "Ambigous redirection\n");
                 return -1;
             }
+            /* delete the token itself and the filename, going after it */
             delete_word_item(pcur, 1);
             delete_word_item(pcur, 0);
             continue;
@@ -539,6 +525,25 @@ cleanup:
         free(cmdp.fileout);
     if(cmd)
         free(cmd);
+}
+
+void print_prompt(FILE *filein, FILE *fileout)
+{
+    if(filein == stdin)
+        fputs("% ", fileout);
+}
+
+void close_prompt(FILE *filein, FILE *fileout)
+{
+    if(filein == stdin)
+        fputc('\n', fileout);
+}
+
+void print_words(struct word_item *wlist, FILE *fileout)
+{
+    struct word_item *item;
+    for(item = wlist; item; item = item->next)
+        fprintf(fileout, "[%s]\n", item->word);
 }
 
 void print_error_msg(int status)

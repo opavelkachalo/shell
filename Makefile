@@ -1,6 +1,8 @@
 CC = gcc
 CFLAGS = -Wall -g
 
-shell: shell.c
+tags: shell.c
 	ctags *.c
+
+shell: shell.c
 	$(CC) $(CFLAGS) $< -o $@
