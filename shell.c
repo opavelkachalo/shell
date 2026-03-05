@@ -184,8 +184,8 @@ char **wlist2arr(struct word_item *wlist, const int *wlen)
     len = wlist_len(wlist) + 1;  /* +1 is for the NULL at the end of arr */
     if(len == 1)
         return NULL;
-    if(wlen && *wlen < len)
-        len = *wlen;
+    if(wlen && *wlen + 1 < len)
+        len = *wlen + 1;
     arr = malloc(len * sizeof(*arr));
     tmp = wlist;
     for(i = 0; i < len-1; i++) {
@@ -547,6 +547,10 @@ int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
         if(res == -1)
             return -1;
     }
+    if(cmdp->is_pipeline) {
+        char **cmd = wlist2arr(cmdp->sub_cmd_p, &cmdp->rel_pos);
+        cmds_append(cmdp, cmd);
+    }
     return 0;
 }
 
@@ -561,6 +565,29 @@ void make_empty_file(const char *path)
     close(fd);
 }
 
+void free_cmds(char ***cmds, int size)
+{
+    int i;
+    for(i = 0; i < size; i++) {
+        free(cmds[i]);
+    }
+    free(cmds);
+}
+
+void print_cmds(char ***cmds, int size)
+{
+    int i;
+    printf("%d\n", size);
+    for(i = 0; i < size; i++) {
+        char **cmd;
+        printf("[ ");
+        for(cmd = cmds[i]; *cmd; cmd++) {
+            printf("%s ", *cmd);
+        }
+        printf("]\n");
+    }
+}
+
 void eval(struct word_item **wlist)
 {
     int res;
@@ -571,6 +598,10 @@ void eval(struct word_item **wlist)
     res = analyze_expression(wlist, &cmdp);
     if(res == -1)
         goto cleanup;
+    if(cmdp.is_pipeline) {
+        /* print_cmds(cmdp.cmds, cmdp.size); */
+        goto cleanup;
+    }
     if(!*wlist) {
         /* truncate file if cmd is `>file' */
         if(cmdp.fileout && !cmdp.append_f)
@@ -586,6 +617,7 @@ void eval(struct word_item **wlist)
 cleanup:
     free(cmdp.filein);
     free(cmdp.fileout);
+    free_cmds(cmdp.cmds, cmdp.size);
     free(cmd);
 }
 
