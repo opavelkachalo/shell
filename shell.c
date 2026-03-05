@@ -156,8 +156,9 @@ struct word_item *tokenize_line(char *line, int *status)
             if(!is_word && c[1] == '"' && (c[2] == ' ' || c[2] == '\0')) {
                 is_word = 1;
                 c++;
-            } else
+            } else {
                 in_quots = !in_quots;
+            }
         } else {
             if(!is_word && (!is_whitespace(*c) || in_quots))
                 is_word = 1;
@@ -168,7 +169,8 @@ struct word_item *tokenize_line(char *line, int *status)
     }
     if(is_word)
         add_word_to_wlist(&dword, &wlist, token_word);
-    *status = in_quots ? code_quot_msmtch : code_succ;
+    if(status)
+        *status = in_quots ? code_quot_msmtch : code_succ;
     if(!wlist.first)
         free(dword.str);
     return wlist.first;
@@ -231,8 +233,9 @@ void cd(char **argv)
                 fprintf(stderr, "%s: cd: OLDPWD not set\n", SELF_NAME);
                 return;
             }
-        } else
+        } else {
             path = argv[1];
+        }
     } else {
         path = getenv("HOME");
         if(!path) {
@@ -257,8 +260,9 @@ int str_to_int(const char *str, int *ok)
     if(*str == '-') {
         sign = 1;
         p = str + 1;
-    } else
+    } else {
         p = str;
+    }
     for(; *p; p++) {
         if(*p < '0' || *p > '9') {
             if(ok)
@@ -284,8 +288,7 @@ void exit_cmd(char **argv)
     if(len > 2) {
         fprintf(stderr, "%s: exit: too many arguments\n", SELF_NAME);
         return;
-    } else
-    if(len == 2) {
+    } else if(len == 2) {
         code = str_to_int(argv[1], &ok);
         if(!ok) {
             fprintf(stderr, "%s: exit: %s: numeric argument required\n",
@@ -300,26 +303,37 @@ void run_builtin(char **argv)
 {
     if(0 == strcmp(argv[0], "cd")) {
         cd(argv);
-    } else
-    if(0 == strcmp(argv[0], "exit")) {
+    } else if(0 == strcmp(argv[0], "exit")) {
         exit_cmd(argv);
     }
     /* more builtin commands to come... */
 }
 
 struct cmd_props {
-    int run_in_bg, append_f, redir_in_cnt, redir_out_cnt;
-    char *filein, *fileout;
+    int  run_in_bg;      /* raised if is a background job (`&' token) */
+    int  append_f;       /* raised if there is a `>>' token in cmd */
+    int  redir_in_cnt;   /* count of `<' tokens in cmd */
+    int  redir_out_cnt;  /* count of `>' tokens in cmd */
+    int  is_pipeline;    /* raised if there is a `|' token in cmd */
+    int  *fds;           /* array of file descriptors for pipelines */
+    char *filein;        /* file to redirect stdin to */
+    char *fileout;       /* file to redirect stdout to */
+    char ***cmds;        /* array of cmd arrays if there is a pipeline */
+    /* tmp pointer to the start of the subcommand (e.g. for a pipeline) */
+    struct word_item *sub_cmd_p;  /* needed for constructing `cmds' field */
 };
 
 void cmdp_init(struct cmd_props *cmdp)
 {
-    cmdp->run_in_bg = 0;
-    cmdp->append_f = 0;
-    cmdp->redir_in_cnt = 0;
+    cmdp->run_in_bg     = 0;
+    cmdp->append_f      = 0;
+    cmdp->redir_in_cnt  = 0;
     cmdp->redir_out_cnt = 0;
-    cmdp->filein = NULL;
-    cmdp->fileout = NULL;
+    cmdp->is_pipeline   = 0;
+    cmdp->fds           = NULL;
+    cmdp->filein        = NULL;
+    cmdp->fileout       = NULL;
+    cmdp->cmds          = NULL;
 }
 
 int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
@@ -432,55 +446,79 @@ void add_redir_info_to_cmdprops(struct cmd_props *cmdp,
     }
 }
 
-void delete_word_item(struct word_item **pcur, int free_word_f)
+void delete_word_item(struct word_item **pcur, int free_word)
 {
     struct word_item *tmp;
     tmp = *pcur;
-    if(free_word_f)
+    if(free_word)
         free(tmp->word);
     *pcur = tmp->next;
     free(tmp);
 }
 
+int handle_bg_token(struct cmd_props *cmdp, struct word_item **pcur)
+{
+    if(!(*pcur)->next) {
+        cmdp->run_in_bg = 1;
+        delete_word_item(pcur, 1);
+        return 0;
+    }
+    fprintf(stderr, "`&' must be the last symbol in the line\n");
+    return -1;
+}
+
+int handle_redirect_token(struct cmd_props *cmdp, struct word_item **pcur)
+{
+    if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
+        fprintf(stderr, "File name expected after `%s'\n", (*pcur)->word);
+        return -1;
+    }
+    add_redir_info_to_cmdprops(cmdp, *pcur);
+    if(cmdp->redir_in_cnt >= 2 || cmdp->redir_out_cnt >= 2) {
+        fprintf(stderr, "Ambigous redirection\n");
+        return -1;
+    }
+    /* delete the token itself and the filename, going after it */
+    delete_word_item(pcur, 1);
+    delete_word_item(pcur, 0);
+    return 0;
+}
+
+int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur)
+{
+    if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
+        fprintf(stderr, "Command expected after `%s'\n", (*pcur)->word);
+        return -1;
+    }
+    cmdp->is_pipeline = 1;
+    delete_word_item(pcur, 1);
+    cmdp->sub_cmd_p = *pcur;
+    return 0;
+}
+
 int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
 {
-    struct word_item **pcur;
-    pcur = wlist;
+    int res;
+    struct word_item **pcur = wlist;
+    cmdp->sub_cmd_p = *wlist;
     while(*pcur) {
-        char *s = (*pcur)->word;
+        char *cur_word = (*pcur)->word;
         if((*pcur)->t_type != token_delimiter) {
             pcur = &(*pcur)->next;
             continue;
         }
-        if(*s == '&') {
-            if(!(*pcur)->next) {
-                cmdp->run_in_bg = 1;
-                delete_word_item(pcur, 1);
-            } else {
-                fprintf(stderr, "& must be the last symbol in the line\n");
-                return -1;
-            }
-        } else
-        if(*s == '<' || *s == '>') {
-            if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
-                fprintf(stderr, "File name expected after `%s'\n", s);
-                return -1;
-            }
-            add_redir_info_to_cmdprops(cmdp, *pcur);
-            if(cmdp->redir_in_cnt >= 2 || cmdp->redir_out_cnt >= 2) {
-                fprintf(stderr, "Ambigous redirection\n");
-                return -1;
-            }
-            /* delete the token itself and the filename, going after it */
-            delete_word_item(pcur, 1);
-            delete_word_item(pcur, 0);
-            continue;
+        if(*cur_word == '&') {
+            res = handle_bg_token(cmdp, pcur);
+        } else if(*cur_word == '<' || *cur_word == '>') {
+            res = handle_redirect_token(cmdp, pcur);
+        } else if(*cur_word == '|') {
+            res = handle_pipe_token(cmdp, pcur);
         } else {
             fprintf(stderr, "Feature is not implemented yet\n");
             return -1;
         }
-        if(*pcur)
-            pcur = &(*pcur)->next;
+        if(res == -1)
+            return -1;
     }
     return 0;
 }
@@ -519,12 +557,9 @@ void eval(struct word_item **wlist)
     }
     exec_cmd(cmd, &cmdp);
 cleanup:
-    if(cmdp.filein)
-        free(cmdp.filein);
-    if(cmdp.fileout)
-        free(cmdp.fileout);
-    if(cmd)
-        free(cmd);
+    free(cmdp.filein);
+    free(cmdp.fileout);
+    free(cmd);
 }
 
 void print_prompt(FILE *filein, FILE *fileout)
