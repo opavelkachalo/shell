@@ -176,14 +176,16 @@ struct word_item *tokenize_line(char *line, int *status)
     return wlist.first;
 }
 
-char **wlist2arr(struct word_item *wlist)
+char **wlist2arr(struct word_item *wlist, int *wlen)
 {
     int len, i;
     char **arr;
     struct word_item *tmp;
-    len = wlist_len(wlist) + 1;  /* +1 is for the NULL at the end */
+    len = wlist_len(wlist) + 1;  /* +1 is for the NULL at the end of arr */
     if(len == 1)
         return NULL;
+    if(wlen && *wlen < len)
+        len = *wlen;
     arr = malloc(len * sizeof(*arr));
     tmp = wlist;
     for(i = 0; i < len-1; i++) {
@@ -550,7 +552,7 @@ void eval(struct word_item **wlist)
             make_empty_file(cmdp.fileout);
         goto cleanup;
     }
-    cmd = wlist2arr(*wlist);
+    cmd = wlist2arr(*wlist, NULL);
     if(is_builtin(cmd[0])) {
         run_builtin(cmd);
         goto cleanup;
