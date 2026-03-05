@@ -176,7 +176,7 @@ struct word_item *tokenize_line(char *line, int *status)
     return wlist.first;
 }
 
-char **wlist2arr(struct word_item *wlist, int *wlen)
+char **wlist2arr(struct word_item *wlist, const int *wlen)
 {
     int len, i;
     char **arr;
@@ -312,17 +312,19 @@ void run_builtin(char **argv)
 }
 
 struct cmd_props {
-    int  run_in_bg;      /* raised if is a background job (`&' token) */
-    int  append_f;       /* raised if there is a `>>' token in cmd */
-    int  redir_in_cnt;   /* count of `<' tokens in cmd */
-    int  redir_out_cnt;  /* count of `>' tokens in cmd */
-    int  is_pipeline;    /* raised if there is a `|' token in cmd */
-    int  *fds;           /* array of file descriptors for pipelines */
-    char *filein;        /* file to redirect stdin to */
-    char *fileout;       /* file to redirect stdout to */
-    char ***cmds;        /* array of cmd arrays if there is a pipeline */
+    int run_in_bg;      /* raised if is a background job (`&' token) */
+    int append_f;       /* raised if there is a `>>' token in cmd */
+    int redir_in_cnt;   /* count of `<' tokens in cmd */
+    int redir_out_cnt;  /* count of `>' tokens in cmd */
+    int is_pipeline;    /* raised if there is a `|' token in cmd */
+    char *filein;       /* file to redirect stdin to */
+    char *fileout;      /* file to redirect stdout to */
+    int *fds;           /* array of file descriptors for pipelines */
+    char ***cmds;       /* array of cmd arrays if there is a pipeline */
+    int size, capacity; /* dynamic array fields fo `cmds' */
     /* tmp pointer to the start of the subcommand (e.g. for a pipeline) */
     struct word_item *sub_cmd_p;  /* needed for constructing `cmds' field */
+    int rel_pos;        /* position of current word relative to `sub_cmd_p' */
 };
 
 void cmdp_init(struct cmd_props *cmdp)
@@ -332,10 +334,14 @@ void cmdp_init(struct cmd_props *cmdp)
     cmdp->redir_in_cnt  = 0;
     cmdp->redir_out_cnt = 0;
     cmdp->is_pipeline   = 0;
-    cmdp->fds           = NULL;
     cmdp->filein        = NULL;
     cmdp->fileout       = NULL;
+    cmdp->fds           = NULL;
     cmdp->cmds          = NULL;
+    cmdp->size          = 0;
+    cmdp->capacity      = 0;
+    cmdp->sub_cmd_p     = NULL;
+    cmdp->rel_pos       = 0;
 }
 
 int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
@@ -486,15 +492,33 @@ int handle_redirect_token(struct cmd_props *cmdp, struct word_item **pcur)
     return 0;
 }
 
+void cmds_append(struct cmd_props *cmdp, char **cmd)
+{
+    if(cmdp->size == cmdp->capacity) {
+        if(cmdp->size == 0)
+            cmdp->capacity = 1;
+        else
+            cmdp->capacity *= 2;
+        cmdp->cmds = realloc(cmdp->cmds, sizeof(*cmdp->cmds) * cmdp->capacity);
+    }
+    (cmdp->cmds)[cmdp->size] = cmd;
+    (cmdp->size)++;
+}
+
 int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur)
 {
+    char **cmd;
     if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
         fprintf(stderr, "Command expected after `%s'\n", (*pcur)->word);
         return -1;
     }
     cmdp->is_pipeline = 1;
+    cmd = wlist2arr(cmdp->sub_cmd_p, &cmdp->rel_pos);
+    cmds_append(cmdp, cmd);
+
     delete_word_item(pcur, 1);
     cmdp->sub_cmd_p = *pcur;
+    cmdp->rel_pos = 0;
     return 0;
 }
 
@@ -507,6 +531,7 @@ int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
         char *cur_word = (*pcur)->word;
         if((*pcur)->t_type != token_delimiter) {
             pcur = &(*pcur)->next;
+            cmdp->rel_pos++;
             continue;
         }
         if(*cur_word == '&') {
