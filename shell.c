@@ -182,10 +182,10 @@ char **wlist2arr(struct word_item *wlist, const int *wlen)
     char **arr;
     struct word_item *tmp;
     len = wlist_len(wlist) + 1;  /* +1 is for the NULL at the end of arr */
-    if(len == 1)
-        return NULL;
     if(wlen && *wlen + 1 < len)
         len = *wlen + 1;
+    if(len == 1)
+        return NULL;
     arr = malloc(len * sizeof(*arr));
     tmp = wlist;
     for(i = 0; i < len-1; i++) {
@@ -359,7 +359,8 @@ int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
         perror(fname);
         return -1;
     }
-    *fdcopy_ptr = dup(stdfd);
+    if(fdcopy_ptr)
+        *fdcopy_ptr = dup(stdfd);
     dup2(fd, stdfd);
     close(fd);
     return 0;
@@ -509,11 +510,15 @@ int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur)
 {
     char **cmd;
     if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
-        fprintf(stderr, "Command expected after `%s'\n", (*pcur)->word);
+        fprintf(stderr, "Syntax error near unexpected token `|'\n");
         return -1;
     }
     cmdp->is_pipeline = 1;
     cmd = wlist2arr(cmdp->sub_cmd_p, &cmdp->rel_pos);
+    if(!cmd) {
+        fprintf(stderr, "Syntax error near unexpected token `|'\n");
+        return -1;
+    }
     cmds_append(cmdp, cmd);
 
     delete_word_item(pcur, 1);
@@ -538,7 +543,7 @@ int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
             res = handle_bg_token(cmdp, pcur);
         } else if(*cur_word == '<' || *cur_word == '>') {
             res = handle_redirect_token(cmdp, pcur);
-        } else if(*cur_word == '|') {
+        } else if(*cur_word == '|' && cur_word[1] != '|') {
             res = handle_pipe_token(cmdp, pcur);
         } else {
             fprintf(stderr, "Feature is not implemented yet\n");
@@ -588,6 +593,96 @@ void print_cmds(char ***cmds, int size)
     }
 }
 
+int pipe_n_times(struct cmd_props *cmdp)
+{
+    int i, len, res;
+    len = (cmdp->size - 1) * 2;  /* x2 for output and input fds */
+    cmdp->fds = malloc(sizeof(*cmdp->fds) * len);
+    for(i = 0; i < len; i+=2) {
+        res = pipe(cmdp->fds + i);
+        if(res == -1) {  /* exceeded the limit for descriptors amount */
+            int j;
+            perror("pipe");
+            for(j = 0; j < i; j++)
+                close(cmdp->fds[j]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void close_all_fds(struct cmd_props *cmdp)
+{
+    int i, len;
+    len = (cmdp->size - 1) * 2;
+    for(i = 0; i < len; i++)
+        close(cmdp->fds[i]);
+}
+
+void run_pipeline_member(struct cmd_props *cmdp, int i)
+{
+    if(i == 0) {  /* first member */
+        if(cmdp->filein)
+            redirect_stdio_stream(0, cmdp->filein, NULL, cmdp->append_f);
+        dup2(cmdp->fds[1], 1);
+    } else if(i == cmdp->size-1) {  /* last member */
+        dup2(cmdp->fds[(i-1)*2], 0);
+        if(cmdp->fileout)
+            redirect_stdio_stream(1, cmdp->fileout, NULL, cmdp->append_f);
+    } else {
+        dup2(cmdp->fds[(i-1)*2], 0);
+        dup2(cmdp->fds[i*2+1], 1);
+    }
+    close_all_fds(cmdp);
+    execvp(*(cmdp->cmds[i]), cmdp->cmds[i]);
+    perror(*(cmdp->cmds[i]));
+    exit(33);
+}
+
+int arr_contains(int *arr, int size, int elem)
+{
+    int i;
+    for(i = 0; i < size; i++) {
+        if(arr[i] == elem)
+            return 1;
+    }
+    return 0;
+}
+
+int run_pipeline(struct cmd_props *cmdp)
+{
+    int res, i, *pids;
+    pids = malloc(sizeof(*pids) * cmdp->size);
+    res = pipe_n_times(cmdp);
+    if(res == -1)
+        goto end_pipeline;
+    for(i = 0; i < cmdp->size; i++) {
+        res = fork();
+        if(res == -1) {
+            perror("fork");
+            break;
+        } else if(res == 0) {
+            run_pipeline_member(cmdp, i);
+        }
+        pids[i] = res;
+    }
+    close_all_fds(cmdp);
+    if(!cmdp->run_in_bg) {
+        signal(SIGCHLD, SIG_DFL);
+        while(i > 0) {
+            res = wait(NULL);
+            if(res == -1)
+                break;
+            if(arr_contains(pids, cmdp->size, res))
+                i--;
+        }
+        signal(SIGCHLD, remove_zombies);
+    }
+end_pipeline:
+    free(pids);
+    return res;
+}
+
 void eval(struct word_item **wlist)
 {
     int res;
@@ -599,7 +694,7 @@ void eval(struct word_item **wlist)
     if(res == -1)
         goto cleanup;
     if(cmdp.is_pipeline) {
-        /* print_cmds(cmdp.cmds, cmdp.size); */
+        run_pipeline(&cmdp);
         goto cleanup;
     }
     if(!*wlist) {
@@ -618,6 +713,7 @@ cleanup:
     free(cmdp.filein);
     free(cmdp.fileout);
     free_cmds(cmdp.cmds, cmdp.size);
+    free(cmdp.fds);
     free(cmd);
 }
 
