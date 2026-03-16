@@ -75,8 +75,6 @@ void dstr_init(struct dyn_str *dstr, int initsize)
     dstr->str = malloc(initsize);
 }
 
-/* TODO: add universal macro for appending to a dynamic array */
-
 void dstr_append(struct dyn_str *dstr, char c)
 {
     if(dstr->pos == dstr->size) {
@@ -255,6 +253,7 @@ void cd(char **argv)
         return;
     }
     setenv("OLDPWD", old_path, 1);
+    setenv("PWD", path, 1);
 }
 
 int str_to_int(const char *str, int *ok)
@@ -356,9 +355,19 @@ int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
         perror(fname);
         return -1;
     }
-    if(fdcopy_ptr)
+    if(fdcopy_ptr) {
         *fdcopy_ptr = dup(stdfd);
-    dup2(fd, stdfd);
+        if(*fdcopy_ptr == -1) {
+            perror("dup");
+            return -1;
+        }
+    }
+    if(dup2(fd, stdfd) == -1) {
+        perror("dup2");
+        if(fdcopy_ptr)
+            *fdcopy_ptr = -1;
+        return -1;
+    }
     close(fd);
     return 0;
 }
@@ -380,11 +389,11 @@ int redirect_streams(struct cmd_props *cmdp, int *fdcopy_ptr0,
 
 void restore_streams(struct cmd_props *cmdp, int fdcopy0, int fdcopy1)
 {
-    if(cmdp->filein) {
+    if(cmdp->filein && fdcopy0 != -1) {
         dup2(fdcopy0, 0);
         close(fdcopy0);
     }
-    if(cmdp->fileout) {
+    if(cmdp->fileout && fdcopy1 != -1) {
         dup2(fdcopy1, 1);
         close(fdcopy1);
     }
@@ -404,34 +413,47 @@ void wait_fg_process(int pid)
     int p;
     do {
         p = wait(NULL);
-    } while(p != pid);
+    } while(p != pid && p != -1);
 }
 
-void exec_cmd(char **cmd, struct cmd_props *cmdp)
+void exec_in_subproc(char **cmd)
 {
-    int pid, cp0, cp1, res;
-    res = redirect_streams(cmdp, &cp0, &cp1);
-    if(res == -1)
-        return;
+    if(is_builtin(cmd[0])) {
+        /* TODO: proper exit codes */
+        run_builtin(cmd);
+        exit(0);
+    }
+    execvp(cmd[0], cmd);
+    if(errno == ENOENT)
+        fprintf(stderr, "%s: %s: command not found\n",
+                SELF_NAME, cmd[0]);
+    else
+        perror(cmd[0]);
+    exit(69);
+}
+
+void run_cmd(char **cmd, struct cmd_props *cmdp)
+{
+    int pid, cp0, cp1;
+    if(redirect_streams(cmdp, &cp0, &cp1) == -1)
+        goto restore;
+    if(!cmdp->run_in_bg && is_builtin(cmd[0])) {
+        run_builtin(cmd);
+        goto restore;
+    }
     pid = fork();
     if(pid == -1) {
         perror(SELF_NAME);
-        return;
-    }
-    if(pid == 0) {
-        execvp(cmd[0], cmd);
-        if(errno == ENOENT)
-            fprintf(stderr, "%s: %s: command not found\n",
-                    SELF_NAME, cmd[0]);
-        else
-            perror(cmd[0]);
-        exit(69);
+        goto restore;
+    } else if(pid == 0) {
+        exec_in_subproc(cmd);
     }
     if(!cmdp->run_in_bg) {
         signal(SIGCHLD, SIG_DFL);
         wait_fg_process(pid);
         signal(SIGCHLD, remove_zombies);
     }
+restore:
     restore_streams(cmdp, cp0, cp1);
 }
 
@@ -633,6 +655,11 @@ void run_pipeline_member(struct cmd_props *cmdp, int i)
         dup2(cmdp->fds[i*2+1], 1);
     }
     close_all_fds(cmdp);
+    if(is_builtin(*(cmdp->cmds[i]))) {
+        /* TODO: proper exit codes */
+        run_builtin(cmdp->cmds[i]);
+        exit(0);
+    }
     execvp(*(cmdp->cmds[i]), cmdp->cmds[i]);
     perror(*(cmdp->cmds[i]));
     exit(33);
@@ -708,11 +735,7 @@ void eval(struct word_item **wlist)
         goto cleanup;
     }
     cmd = wlist2arr(*wlist, NULL);
-    if(is_builtin(cmd[0])) {
-        run_builtin(cmd);
-        goto cleanup;
-    }
-    exec_cmd(cmd, &cmdp);
+    run_cmd(cmd, &cmdp);
 cleanup:
     free(cmdp.filein);
     free(cmdp.fileout);
