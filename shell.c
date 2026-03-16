@@ -75,6 +75,8 @@ void dstr_init(struct dyn_str *dstr, int initsize)
     dstr->str = malloc(initsize);
 }
 
+/* TODO: add universal macro for appending to a dynamic array */
+
 void dstr_append(struct dyn_str *dstr, char c)
 {
     if(dstr->pos == dstr->size) {
@@ -322,9 +324,6 @@ struct cmd_props {
     int *fds;           /* array of file descriptors for pipelines */
     char ***cmds;       /* array of cmd arrays if there is a pipeline */
     int size, capacity; /* dynamic array fields fo `cmds' */
-    /* tmp pointer to the start of the subcommand (e.g. for a pipeline) */
-    struct word_item *sub_cmd_p;  /* needed for constructing `cmds' field */
-    int rel_pos;        /* position of current word relative to `sub_cmd_p' */
 };
 
 void cmdp_init(struct cmd_props *cmdp)
@@ -340,8 +339,6 @@ void cmdp_init(struct cmd_props *cmdp)
     cmdp->cmds          = NULL;
     cmdp->size          = 0;
     cmdp->capacity      = 0;
-    cmdp->sub_cmd_p     = NULL;
-    cmdp->rel_pos       = 0;
 }
 
 int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
@@ -374,7 +371,7 @@ int redirect_streams(struct cmd_props *cmdp, int *fdcopy_ptr0,
         res = redirect_stdio_stream(0, cmdp->filein, fdcopy_ptr0,
                                     cmdp->append_f);
     if(res == -1)
-        return res;
+        return -1;
     if(cmdp->fileout)
         res = redirect_stdio_stream(1, cmdp->fileout, fdcopy_ptr1,
                                     cmdp->append_f);
@@ -506,7 +503,8 @@ void cmds_append(struct cmd_props *cmdp, char **cmd)
     (cmdp->size)++;
 }
 
-int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur)
+int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur,
+                      struct word_item **sub_cmd_p, int *rel_pos)
 {
     char **cmd;
     if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
@@ -514,7 +512,7 @@ int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur)
         return -1;
     }
     cmdp->is_pipeline = 1;
-    cmd = wlist2arr(cmdp->sub_cmd_p, &cmdp->rel_pos);
+    cmd = wlist2arr(*sub_cmd_p, rel_pos);
     if(!cmd) {
         fprintf(stderr, "Syntax error near unexpected token `|'\n");
         return -1;
@@ -522,21 +520,22 @@ int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur)
     cmds_append(cmdp, cmd);
 
     delete_word_item(pcur, 1);
-    cmdp->sub_cmd_p = *pcur;
-    cmdp->rel_pos = 0;
+    *sub_cmd_p = *pcur;
+    *rel_pos = 0;
     return 0;
 }
 
 int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
 {
-    int res;
+    int res, rel_pos = 0;
+    struct word_item *sub_cmd_p = NULL;
     struct word_item **pcur = wlist;
-    cmdp->sub_cmd_p = *wlist;
+    sub_cmd_p = *wlist;
     while(*pcur) {
         char *cur_word = (*pcur)->word;
         if((*pcur)->t_type != token_delimiter) {
             pcur = &(*pcur)->next;
-            cmdp->rel_pos++;
+            rel_pos++;
             continue;
         }
         if(*cur_word == '&') {
@@ -544,7 +543,7 @@ int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
         } else if(*cur_word == '<' || *cur_word == '>') {
             res = handle_redirect_token(cmdp, pcur);
         } else if(*cur_word == '|' && cur_word[1] != '|') {
-            res = handle_pipe_token(cmdp, pcur);
+            res = handle_pipe_token(cmdp, pcur, &sub_cmd_p, &rel_pos);
         } else {
             fprintf(stderr, "Feature is not implemented yet\n");
             return -1;
@@ -553,7 +552,7 @@ int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
             return -1;
     }
     if(cmdp->is_pipeline) {
-        char **cmd = wlist2arr(cmdp->sub_cmd_p, &cmdp->rel_pos);
+        char **cmd = wlist2arr(sub_cmd_p, &rel_pos);
         cmds_append(cmdp, cmd);
     }
     return 0;
@@ -649,6 +648,20 @@ int arr_contains(int *arr, int size, int elem)
     return 0;
 }
 
+void wait_pipeline_members(int *pids, int pids_size, int pids_left)
+{
+    int res;
+    signal(SIGCHLD, SIG_DFL);
+    while(pids_left > 0) {
+        res = wait(NULL);
+        if(res == -1)
+            break;
+        if(arr_contains(pids, pids_size, res))
+            pids_left--;
+    }
+    signal(SIGCHLD, remove_zombies);
+}
+
 int run_pipeline(struct cmd_props *cmdp)
 {
     int res, i, *pids;
@@ -667,17 +680,8 @@ int run_pipeline(struct cmd_props *cmdp)
         pids[i] = res;
     }
     close_all_fds(cmdp);
-    if(!cmdp->run_in_bg) {
-        signal(SIGCHLD, SIG_DFL);
-        while(i > 0) {
-            res = wait(NULL);
-            if(res == -1)
-                break;
-            if(arr_contains(pids, cmdp->size, res))
-                i--;
-        }
-        signal(SIGCHLD, remove_zombies);
-    }
+    if(!cmdp->run_in_bg)
+        wait_pipeline_members(pids, cmdp->size, i);
 end_pipeline:
     free(pids);
     return res;
@@ -716,6 +720,8 @@ cleanup:
     free(cmdp.fds);
     free(cmd);
 }
+
+/* TODO: use isatty(3) in the future for `prompt' functions */
 
 void print_prompt(FILE *filein, FILE *fileout)
 {
@@ -759,9 +765,9 @@ void read_lines(FILE *filein, FILE *fileout)
         if(c == '\n') {
             int status;
             dstr_append(&dline, '\0');
+            /* TODO: env variables expansion; `*`, `?` patterns matching */ 
             wlist = tokenize_line(dline.str, &status);
             if(status == code_succ && wlist)
-                /* print_words(wlist, fileout); */
                 eval(&wlist);
             else
                 print_error_msg(status);
