@@ -491,7 +491,7 @@ int handle_bg_token(struct cmd_props *cmdp, struct word_item **pcur)
         delete_word_item(pcur, 1);
         return 0;
     }
-    fprintf(stderr, "`&' must be the last symbol in the line\n");
+    fprintf(stderr, "`&' must be the last character in the line\n");
     return -1;
 }
 
@@ -785,22 +785,21 @@ void read_lines(FILE *filein, FILE *fileout)
     wlist = NULL;
     print_prompt(filein, fileout);
     while((c = fgetc(filein)) != EOF) {
-        if(c == '\n') {
-            int status;
-            dstr_append(&dline, '\0');
-            /* TODO: env variables expansion; `*`, `?` patterns matching */ 
-            wlist = tokenize_line(dline.str, &status);
-            if(status == code_succ && wlist)
-                eval(&wlist);
-            else
-                print_error_msg(status);
-            if(wlist)
-                wlist_free(wlist);
-            dline.pos = 0;
-            print_prompt(filein, fileout);
+        int status;
+        if(c != '\n') {
+            dstr_append(&dline, c);
             continue;
         }
-        dstr_append(&dline, c);
+        dstr_append(&dline, '\0');
+        /* TODO: env variables expansion; `*`, `?` patterns matching */
+        wlist = tokenize_line(dline.str, &status);
+        if(status == code_succ && wlist)
+            eval(&wlist);
+        else
+            print_error_msg(status);
+        wlist_free(wlist);
+        dline.pos = 0;
+        print_prompt(filein, fileout);
     }
     close_prompt(filein, fileout);
     free(dline.str);
