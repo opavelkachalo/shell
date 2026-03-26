@@ -16,6 +16,8 @@ enum {
 
 #define SELF_NAME "shell"
 
+int session_tty_fd;
+
 enum token_type { token_word, token_delimiter };
 
 struct word_item {
@@ -313,7 +315,7 @@ void run_builtin(char **argv)
 }
 
 struct cmd_props {
-    int run_in_bg;      /* raised if is a background job (`&' token) */
+    int run_in_bg;      /* raised if is a background job */
     int append_f;       /* raised if there is a `>>' token in cmd */
     int redir_in_cnt;   /* count of `<' tokens in cmd */
     int redir_out_cnt;  /* count of `>' tokens in cmd */
@@ -322,7 +324,7 @@ struct cmd_props {
     char *fileout;      /* file to redirect stdout to */
     int *fds;           /* array of file descriptors for pipelines */
     char ***cmds;       /* array of cmd arrays if there is a pipeline */
-    int size, capacity; /* dynamic array fields fo `cmds' */
+    int size, capacity; /* dynamic array fields for `cmds' */
 };
 
 void cmdp_init(struct cmd_props *cmdp)
@@ -448,10 +450,13 @@ void run_cmd(char **cmd, struct cmd_props *cmdp)
     } else if(pid == 0) {
         exec_in_subproc(cmd);
     }
+    setpgid(pid, pid);
     if(!cmdp->run_in_bg) {
+        tcsetpgrp(session_tty_fd, pid);
         signal(SIGCHLD, SIG_DFL);
         wait_fg_process(pid);
         signal(SIGCHLD, remove_zombies);
+        tcsetpgrp(session_tty_fd, getpid());
     }
 restore:
     restore_streams(cmdp, cp0, cp1);
@@ -691,7 +696,7 @@ void wait_pipeline_members(int *pids, int pids_size, int pids_left)
 
 int run_pipeline(struct cmd_props *cmdp)
 {
-    int res, i, *pids;
+    int res, i, *pids, pgid;
     pids = malloc(sizeof(*pids) * cmdp->size);
     res = pipe_n_times(cmdp);
     if(res == -1)
@@ -704,11 +709,17 @@ int run_pipeline(struct cmd_props *cmdp)
         } else if(res == 0) {
             run_pipeline_member(cmdp, i);
         }
+        if(i == 0)
+            pgid = res;
+        setpgid(res, pgid);
         pids[i] = res;
     }
     close_all_fds(cmdp);
-    if(!cmdp->run_in_bg)
+    if(!cmdp->run_in_bg) {
+        tcsetpgrp(session_tty_fd, pgid);
         wait_pipeline_members(pids, cmdp->size, i);
+        tcsetpgrp(session_tty_fd, getpid());
+    }
 end_pipeline:
     free(pids);
     return res;
@@ -772,7 +783,6 @@ void print_error_msg(int status)
         fprintf(stderr, "Error: unmatched quotes\n");
         break;
     default:
-        break;
     }
 }
 
@@ -807,7 +817,14 @@ void read_lines(FILE *filein, FILE *fileout)
 
 int main()
 {
+    session_tty_fd = open("/dev/tty", O_RDWR);
+    if(session_tty_fd == -1) {
+        perror("/dev/tty");
+        return 1;
+    }
     signal(SIGCHLD, remove_zombies);
+    signal(SIGTTOU, SIG_IGN);
     read_lines(stdin, stdout);
+    close(session_tty_fd);
     return 0;
 }
