@@ -1,11 +1,17 @@
 CC = gcc
 CFLAGS = -Wall -g
-TARGETS = shell editline tags
+TARGETS = shell tags
+OBJS = shell.o editline.o
 
 all: $(TARGETS)
 
-%: %.c %.h
-	$(CC) $(CFLAGS) -DDEBUG_PRINT $< -o $@
+%: %.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+shell: $(OBJS)
 
 .PHONY: tags
 tags:
