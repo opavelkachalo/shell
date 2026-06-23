@@ -1,9 +1,9 @@
-#include "editline.h"
 #include <stdio.h>
 #include <termios.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include "editline.h"
 
 /* #include <assert.h> */
 
@@ -401,17 +401,6 @@ char *get_line()
         size++;
     }
     return res;
-}
-
-int main()
-{
-    char *str;
-
-    str = get_line();
-    if(str)
-        printf("[%s]\n", str);
-    free(str);
-    return 0;
 }
 /* TODO: autocompletion */
 /* TODO: history */

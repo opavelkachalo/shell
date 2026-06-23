@@ -6,6 +6,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <signal.h>
+#include "editline.h"
 
 enum {
     word_init_size   = 4,
@@ -555,8 +556,9 @@ int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur,
 int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
 {
     int res, rel_pos = 0;
+    /* `sub_cmd_p` -- pointer to the subcommand in pipelines */
     struct word_item *sub_cmd_p = NULL;
-    struct word_item **pcur = wlist;
+    struct word_item **pcur = wlist; /* pointer to the current word */
     sub_cmd_p = *wlist;
     while(*pcur) {
         char *cur_word = (*pcur)->word;
@@ -815,6 +817,26 @@ void read_lines(FILE *filein, FILE *fileout)
     free(dline.str);
 }
 
+void io_and_execmds()
+{
+    char *line;
+    struct word_item *wlist;
+    print_prompt(stdin, stdout);
+    while((line = get_line()) != NULL) {
+        int status;
+        /* TODO: env variables expansion; `*`, `?` patterns matching */
+        wlist = tokenize_line(line, &status);
+        if(status == code_succ && wlist)
+            eval(&wlist);
+        else
+            print_error_msg(status);
+        wlist_free(wlist);
+        free(line);
+        print_prompt(stdin, stdout);
+    }
+    close_prompt(stdin, stdout);
+}
+
 int main()
 {
     session_tty_fd = open("/dev/tty", O_RDWR);
@@ -824,7 +846,10 @@ int main()
     }
     signal(SIGCHLD, remove_zombies);
     signal(SIGTTOU, SIG_IGN);
-    read_lines(stdin, stdout);
+    /* read_lines(stdin, stdout); */
+    io_and_execmds();
     close(session_tty_fd);
     return 0;
 }
+/* TODO: SIGHUP handling */
+/* TODO: jobs, fg, bg builtins */
