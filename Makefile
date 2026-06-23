@@ -1,8 +1,12 @@
 CC = gcc
 CFLAGS = -Wall -g
+TARGETS = shell editline tags
 
-tags: shell.c
-	ctags *.c
+all: $(TARGETS)
 
-shell: shell.c
-	$(CC) $(CFLAGS) $< -o $@
+%: %.c %.h
+	$(CC) $(CFLAGS) -DDEBUG_PRINT $< -o $@
+
+.PHONY: tags
+tags:
+	ctags *.[ch]

@@ -2,3 +2,4 @@ shell
 *.o
 tags
 tests/
+editline
