@@ -42,6 +42,7 @@ enum key {
     ctrl_j,          /* line feed ('\n') */
     ctrl_n = 14,
     ctrl_p = 16,
+    ctrl_u = 21,
     ctrl_w = 23,
     backspace = 127,
 };
@@ -262,6 +263,14 @@ static void werase(struct l_list *line)
         bs_char(line);
 }
 
+static void erase_line(struct l_list *line)
+{
+    CLEAR_N_CHARS(line->size);
+    l_list_free(line);
+    l_list_init(line);
+    GOTO_NTH_COL(1);
+}
+
 static void autocomplete(struct l_list *line)
 {
    if(line->nth_word == 1) {
@@ -339,6 +348,9 @@ static char *edit_line()
                 del_char(&line);
             }
             break;
+        case ctrl_u:
+            erase_line(&line);
+            break;
         case ctrl_w:
             werase(&line);
             break;
@@ -403,6 +415,7 @@ char *get_line()
     return res;
 }
 /* TODO: autocompletion */
+/* TODO: prompt */
 /* TODO: history */
 /* TODO: multiline strings */
 /* TODO: SIGWINCH handling */

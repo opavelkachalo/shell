@@ -9,7 +9,7 @@ all: $(TARGETS)
 	$(CC) $(CFLAGS) $^ -o $@
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -DDEBUG_PRINT -c $< -o $@
 
 shell: $(OBJS)
 

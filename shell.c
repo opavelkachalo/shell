@@ -821,7 +821,6 @@ void io_and_execmds()
 {
     char *line;
     struct word_item *wlist;
-    print_prompt(stdin, stdout);
     while((line = get_line()) != NULL) {
         int status;
         /* TODO: env variables expansion; `*`, `?` patterns matching */
@@ -832,9 +831,7 @@ void io_and_execmds()
             print_error_msg(status);
         wlist_free(wlist);
         free(line);
-        print_prompt(stdin, stdout);
     }
-    close_prompt(stdin, stdout);
 }
 
 int main()
