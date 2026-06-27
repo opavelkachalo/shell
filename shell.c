@@ -612,6 +612,7 @@ static void free_cmds(char ***cmds, int size)
     free(cmds);
 }
 
+#if 0 /* print array of commands (e.g. from pipes) */
 static void print_cmds(char ***cmds, int size)
 {
     int i;
@@ -625,6 +626,7 @@ static void print_cmds(char ***cmds, int size)
         printf("]\n");
     }
 }
+#endif
 
 static int pipe_n_times(struct cmd_props *cmdp)
 {
@@ -760,25 +762,6 @@ cleanup:
     free_cmds(cmdp.cmds, cmdp.size);
     free(cmdp.fds);
     free(cmd);
-}
-
-static void print_prompt(FILE *filein, FILE *fileout)
-{
-    if(filein == stdin)
-        fputs("% ", fileout);
-}
-
-static void close_prompt(FILE *filein, FILE *fileout)
-{
-    if(filein == stdin)
-        fputc('\n', fileout);
-}
-
-static void print_words(struct word_item *wlist, FILE *fileout)
-{
-    struct word_item *item;
-    for(item = wlist; item; item = item->next)
-        fprintf(fileout, "[%s]\n", item->word);
 }
 
 static void print_error_msg(int status)
