@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -g
 TARGETS = shell tags
-OBJS = shell.o editline.o
+OBJS = shell.o editline.o containers.o
 
 all: $(TARGETS)
 
@@ -9,10 +9,13 @@ all: $(TARGETS)
 	$(CC) $(CFLAGS) $^ -o $@
 
 %.o: %.c
-	$(CC) $(CFLAGS) -DDEBUG_PRINT -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 shell: $(OBJS)
 
-.PHONY: tags
+.PHONY: tags clean
 tags:
 	ctags *.[ch]
+
+clean:
+	rm -f $(TARGETS) $(OBJS)
