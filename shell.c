@@ -31,8 +31,8 @@ struct word_list {
     struct word_item *first, *last;
 };
 
-void wlist_append(struct word_list *wlist, char *word,
-                  enum token_type t_type)
+static void wlist_append(struct word_list *wlist, char *word,
+                         enum token_type t_type)
 {
     struct word_item *tmp;
     tmp = malloc(sizeof(*tmp));
@@ -46,7 +46,7 @@ void wlist_append(struct word_list *wlist, char *word,
     wlist->last = tmp;
 }
 
-int wlist_len(struct word_item *wlist)
+static int wlist_len(struct word_item *wlist)
 {
     int len;
     struct word_item *tmp;
@@ -56,7 +56,7 @@ int wlist_len(struct word_item *wlist)
     return len;
 }
 
-void wlist_free(struct word_item *wlist)
+static void wlist_free(struct word_item *wlist)
 {
     while(wlist) {
         struct word_item *tmp = wlist;
@@ -71,14 +71,14 @@ struct dyn_str {
     char *str;
 };
 
-void dstr_init(struct dyn_str *dstr, int initsize)
+static void dstr_init(struct dyn_str *dstr, int initsize)
 {
     dstr->pos = 0;
     dstr->size = initsize;
     dstr->str = malloc(initsize);
 }
 
-void dstr_append(struct dyn_str *dstr, char c)
+static void dstr_append(struct dyn_str *dstr, char c)
 {
     if(dstr->pos == dstr->size) {
         dstr->size *= 2;
@@ -88,25 +88,25 @@ void dstr_append(struct dyn_str *dstr, char c)
     (dstr->pos)++;
 }
 
-int is_whitespace(char c)
+static int is_whitespace(char c)
 {
     return c == ' ' || c == '\t';
 }
 
-void add_word_to_wlist(struct dyn_str *dstr, struct word_list *wlist,
-              enum token_type t_type)
+static void add_word_to_wlist(struct dyn_str *dstr, struct word_list *wlist,
+                              enum token_type t_type)
 {
     dstr_append(dstr, '\0');
     wlist_append(wlist, dstr->str, t_type);
 }
 
-int is_delimiter(char c)
+static int is_delimiter(char c)
 {
     return c == '&' || c == '>' || c == '<' || c == '|' || c == ';' ||
            c == '(' || c == ')';
 }
 
-int delimiter_len(char *c)
+static int delimiter_len(char *c)
 {
     /* 1 or 2
        & > < | ; ( )
@@ -117,8 +117,8 @@ int delimiter_len(char *c)
     return 1;
 }
 
-void add_delimiter_to_wlist(char **c, struct dyn_str *dword,
-                            struct word_list *wlist)
+static void add_delimiter_to_wlist(char **c, struct dyn_str *dword,
+                                   struct word_list *wlist)
 {
     int dlen, i;
     dlen = delimiter_len(*c);
@@ -137,7 +137,7 @@ void add_delimiter_to_wlist(char **c, struct dyn_str *dword,
     (*c) += dlen-1;
 }
 
-struct word_item *tokenize_line(char *line, int *status)
+static struct word_item *tokenize_line(char *line, int *status)
 {
     char *c;
     struct dyn_str dword;
@@ -179,7 +179,7 @@ struct word_item *tokenize_line(char *line, int *status)
     return wlist.first;
 }
 
-char **wlist2arr(struct word_item *wlist, const int *wlen)
+static char **wlist2arr(struct word_item *wlist, const int *wlen)
 {
     int len, i;
     char **arr;
@@ -205,7 +205,7 @@ char *builtins[] = {
     /* more builtin commands to come... */
 };
 
-int is_builtin(const char *cmd)
+static int is_builtin(const char *cmd)
 {
     int blen, i;
     blen = sizeof(builtins) / sizeof(*builtins);
@@ -215,7 +215,7 @@ int is_builtin(const char *cmd)
     return 0;
 }
 
-int len_argv(char **argv)
+static int len_argv(char **argv)
 {
     char **arg;
     for(arg = argv; *arg; arg++)
@@ -223,7 +223,7 @@ int len_argv(char **argv)
     return arg - argv;
 }
 
-void cd(char **argv)
+static void cd(char **argv)
 {
     int res, len;
     char *path, *old_path;
@@ -259,7 +259,7 @@ void cd(char **argv)
     setenv("PWD", path, 1);
 }
 
-int str_to_int(const char *str, int *ok)
+static int str_to_int(const char *str, int *ok)
 {
     int res = 0, sign = 0;
     const char *p;
@@ -283,7 +283,7 @@ int str_to_int(const char *str, int *ok)
     return sign ? -res : res;
 }
 
-void exit_cmd(char **argv)
+static void exit_cmd(char **argv)
 {
     /* there is a minor memory leak caused by this function
      * (wlist and cmd are not being released)
@@ -305,7 +305,7 @@ void exit_cmd(char **argv)
     exit(code);
 }
 
-void run_builtin(char **argv)
+static void run_builtin(char **argv)
 {
     if(0 == strcmp(argv[0], "cd")) {
         cd(argv);
@@ -328,7 +328,7 @@ struct cmd_props {
     int size, capacity; /* dynamic array fields for `cmds' */
 };
 
-void cmdp_init(struct cmd_props *cmdp)
+static void cmdp_init(struct cmd_props *cmdp)
 {
     cmdp->run_in_bg     = 0;
     cmdp->append_f      = 0;
@@ -343,8 +343,8 @@ void cmdp_init(struct cmd_props *cmdp)
     cmdp->capacity      = 0;
 }
 
-int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
-                          int append_f)
+static int redirect_stdio_stream(int stdfd, const char *fname,
+                                 int *fdcopy_ptr, int append_f)
 {
     int fd, flags;
     if(stdfd == 0) {
@@ -375,8 +375,8 @@ int redirect_stdio_stream(int stdfd, const char *fname, int *fdcopy_ptr,
     return 0;
 }
 
-int redirect_streams(struct cmd_props *cmdp, int *fdcopy_ptr0,
-                     int *fdcopy_ptr1)
+static int redirect_streams(struct cmd_props *cmdp, int *fdcopy_ptr0,
+                            int *fdcopy_ptr1)
 {
     int res = 0;
     if(cmdp->filein)
@@ -390,7 +390,8 @@ int redirect_streams(struct cmd_props *cmdp, int *fdcopy_ptr0,
     return res;
 }
 
-void restore_streams(struct cmd_props *cmdp, int fdcopy0, int fdcopy1)
+static void restore_streams(struct cmd_props *cmdp, int fdcopy0,
+                            int fdcopy1)
 {
     if(cmdp->filein && fdcopy0 != -1) {
         dup2(fdcopy0, 0);
@@ -402,7 +403,7 @@ void restore_streams(struct cmd_props *cmdp, int fdcopy0, int fdcopy1)
     }
 }
 
-void remove_zombies(int s)
+static void remove_zombies(int s)
 {
     int p;
     signal(SIGCHLD, remove_zombies);
@@ -411,7 +412,7 @@ void remove_zombies(int s)
     } while(p > 0);
 }
 
-void wait_fg_process(int pid)
+static void wait_fg_process(int pid)
 {
     int p;
     do {
@@ -419,7 +420,7 @@ void wait_fg_process(int pid)
     } while(p != pid && p != -1);
 }
 
-void exec_in_subproc(char **cmd)
+static void exec_in_subproc(char **cmd)
 {
     if(is_builtin(cmd[0])) {
         /* TODO: proper exit codes */
@@ -435,7 +436,7 @@ void exec_in_subproc(char **cmd)
     exit(69);
 }
 
-void run_cmd(char **cmd, struct cmd_props *cmdp)
+static void run_cmd(char **cmd, struct cmd_props *cmdp)
 {
     int pid, cp0, cp1;
     if(redirect_streams(cmdp, &cp0, &cp1) == -1)
@@ -463,8 +464,8 @@ restore:
     restore_streams(cmdp, cp0, cp1);
 }
 
-void add_redir_info_to_cmdprops(struct cmd_props *cmdp,
-                                struct word_item *cur)
+static void add_redir_info_to_cmdprops(struct cmd_props *cmdp,
+                                       struct word_item *cur)
 {
     char *cur_word, *redir_file;
     cur_word = cur->word;
@@ -480,7 +481,7 @@ void add_redir_info_to_cmdprops(struct cmd_props *cmdp,
     }
 }
 
-void delete_word_item(struct word_item **pcur, int free_word)
+static void delete_word_item(struct word_item **pcur, int free_word)
 {
     struct word_item *tmp;
     tmp = *pcur;
@@ -490,7 +491,7 @@ void delete_word_item(struct word_item **pcur, int free_word)
     free(tmp);
 }
 
-int handle_bg_token(struct cmd_props *cmdp, struct word_item **pcur)
+static int handle_bg_token(struct cmd_props *cmdp, struct word_item **pcur)
 {
     if(!(*pcur)->next) {
         cmdp->run_in_bg = 1;
@@ -501,7 +502,8 @@ int handle_bg_token(struct cmd_props *cmdp, struct word_item **pcur)
     return -1;
 }
 
-int handle_redirect_token(struct cmd_props *cmdp, struct word_item **pcur)
+static int handle_redirect_token(struct cmd_props *cmdp,
+                                 struct word_item **pcur)
 {
     if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
         fprintf(stderr, "File name expected after `%s'\n", (*pcur)->word);
@@ -518,21 +520,23 @@ int handle_redirect_token(struct cmd_props *cmdp, struct word_item **pcur)
     return 0;
 }
 
-void cmds_append(struct cmd_props *cmdp, char **cmd)
+static void cmds_append(struct cmd_props *cmdp, char **cmd)
 {
     if(cmdp->size == cmdp->capacity) {
         if(cmdp->size == 0)
             cmdp->capacity = 1;
         else
             cmdp->capacity *= 2;
-        cmdp->cmds = realloc(cmdp->cmds, sizeof(*cmdp->cmds) * cmdp->capacity);
+        cmdp->cmds = realloc(cmdp->cmds,
+                             sizeof(*cmdp->cmds) * cmdp->capacity);
     }
     (cmdp->cmds)[cmdp->size] = cmd;
     (cmdp->size)++;
 }
 
-int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur,
-                      struct word_item **sub_cmd_p, int *rel_pos)
+static int handle_pipe_token(struct cmd_props *cmdp,
+                             struct word_item **pcur,
+                             struct word_item **sub_cmd_p, int *rel_pos)
 {
     char **cmd;
     if(!(*pcur)->next || (*pcur)->next->t_type != token_word) {
@@ -553,7 +557,8 @@ int handle_pipe_token(struct cmd_props *cmdp, struct word_item **pcur,
     return 0;
 }
 
-int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
+static int analyze_expression(struct word_item **wlist,
+                              struct cmd_props *cmdp)
 {
     int res, rel_pos = 0;
     /* `sub_cmd_p` -- pointer to the subcommand in pipelines */
@@ -587,7 +592,7 @@ int analyze_expression(struct word_item **wlist, struct cmd_props *cmdp)
     return 0;
 }
 
-void make_empty_file(const char *path)
+static void make_empty_file(const char *path)
 {
     int fd;
     fd = open(path, O_CREAT|O_TRUNC, 0666);
@@ -598,7 +603,7 @@ void make_empty_file(const char *path)
     close(fd);
 }
 
-void free_cmds(char ***cmds, int size)
+static void free_cmds(char ***cmds, int size)
 {
     int i;
     for(i = 0; i < size; i++) {
@@ -607,7 +612,7 @@ void free_cmds(char ***cmds, int size)
     free(cmds);
 }
 
-void print_cmds(char ***cmds, int size)
+static void print_cmds(char ***cmds, int size)
 {
     int i;
     printf("%d\n", size);
@@ -621,7 +626,7 @@ void print_cmds(char ***cmds, int size)
     }
 }
 
-int pipe_n_times(struct cmd_props *cmdp)
+static int pipe_n_times(struct cmd_props *cmdp)
 {
     int i, len, res;
     len = (cmdp->size - 1) * 2;  /* x2 for output and input fds */
@@ -639,7 +644,7 @@ int pipe_n_times(struct cmd_props *cmdp)
     return 0;
 }
 
-void close_all_fds(struct cmd_props *cmdp)
+static void close_all_fds(struct cmd_props *cmdp)
 {
     int i, len;
     len = (cmdp->size - 1) * 2;
@@ -647,7 +652,7 @@ void close_all_fds(struct cmd_props *cmdp)
         close(cmdp->fds[i]);
 }
 
-void run_pipeline_member(struct cmd_props *cmdp, int i)
+static void run_pipeline_member(struct cmd_props *cmdp, int i)
 {
     if(i == 0) {  /* first member */
         if(cmdp->filein)
@@ -672,7 +677,7 @@ void run_pipeline_member(struct cmd_props *cmdp, int i)
     exit(33);
 }
 
-int arr_contains(int *arr, int size, int elem)
+static int arr_contains(int *arr, int size, int elem)
 {
     int i;
     for(i = 0; i < size; i++) {
@@ -682,7 +687,7 @@ int arr_contains(int *arr, int size, int elem)
     return 0;
 }
 
-void wait_pipeline_members(int *pids, int pids_size, int pids_left)
+static void wait_pipeline_members(int *pids, int pids_size, int pids_left)
 {
     int res;
     signal(SIGCHLD, SIG_DFL);
@@ -696,7 +701,7 @@ void wait_pipeline_members(int *pids, int pids_size, int pids_left)
     signal(SIGCHLD, remove_zombies);
 }
 
-int run_pipeline(struct cmd_props *cmdp)
+static int run_pipeline(struct cmd_props *cmdp)
 {
     int res, i, *pids, pgid;
     pids = malloc(sizeof(*pids) * cmdp->size);
@@ -727,7 +732,7 @@ end_pipeline:
     return res;
 }
 
-void eval(struct word_item **wlist)
+static void eval(struct word_item **wlist)
 {
     int res;
     char **cmd;
@@ -757,28 +762,26 @@ cleanup:
     free(cmd);
 }
 
-/* TODO: use isatty(3) in the future for `prompt' functions */
-
-void print_prompt(FILE *filein, FILE *fileout)
+static void print_prompt(FILE *filein, FILE *fileout)
 {
     if(filein == stdin)
         fputs("% ", fileout);
 }
 
-void close_prompt(FILE *filein, FILE *fileout)
+static void close_prompt(FILE *filein, FILE *fileout)
 {
     if(filein == stdin)
         fputc('\n', fileout);
 }
 
-void print_words(struct word_item *wlist, FILE *fileout)
+static void print_words(struct word_item *wlist, FILE *fileout)
 {
     struct word_item *item;
     for(item = wlist; item; item = item->next)
         fprintf(fileout, "[%s]\n", item->word);
 }
 
-void print_error_msg(int status)
+static void print_error_msg(int status)
 {
     switch(status) {
     case code_quot_msmtch:
@@ -788,36 +791,7 @@ void print_error_msg(int status)
     }
 }
 
-void read_lines(FILE *filein, FILE *fileout)
-{
-    int c;
-    struct dyn_str dline;
-    struct word_item *wlist;
-    dstr_init(&dline, line_init_size);
-    wlist = NULL;
-    print_prompt(filein, fileout);
-    while((c = fgetc(filein)) != EOF) {
-        int status;
-        if(c != '\n') {
-            dstr_append(&dline, c);
-            continue;
-        }
-        dstr_append(&dline, '\0');
-        /* TODO: env variables expansion; `*`, `?` patterns matching */
-        wlist = tokenize_line(dline.str, &status);
-        if(status == code_succ && wlist)
-            eval(&wlist);
-        else
-            print_error_msg(status);
-        wlist_free(wlist);
-        dline.pos = 0;
-        print_prompt(filein, fileout);
-    }
-    close_prompt(filein, fileout);
-    free(dline.str);
-}
-
-void io_and_execmds()
+static void io_and_execmds()
 {
     char *line;
     struct word_item *wlist;
@@ -843,7 +817,6 @@ int main()
     }
     signal(SIGCHLD, remove_zombies);
     signal(SIGTTOU, SIG_IGN);
-    /* read_lines(stdin, stdout); */
     io_and_execmds();
     close(session_tty_fd);
     return 0;
