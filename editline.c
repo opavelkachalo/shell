@@ -7,6 +7,7 @@
 
 /* #include <assert.h> */
 
+#define DEBUG_PRINT
 #ifdef DEBUG_PRINT
 # include <sys/ioctl.h>
 
@@ -45,12 +46,21 @@ enum key {
     ctrl_u = 21,
     ctrl_w = 23,
     backspace = 127,
+    /*
+     * TODO: alt_f  -- word forward
+     * TODO: alt_b  -- word back
+     * TODO: alt_u  -- uppercase
+     * TODO: alt_l  -- lowercase
+     * TODO: alt_c  -- capitalize
+     * TODO: alt_t  -- swap words
+     * TODO: ctrl_t -- swap chars
+     */
 };
 
 struct l_item {
-    char val;
     struct l_item *next;
     struct l_item *prev;
+    char val;
 };
 
 /*
@@ -63,7 +73,6 @@ struct l_list {
     struct l_item *curp;
     int size;
     int curpos;
-    int nth_word;
 };
 
 static void append_tmp_to_tail(struct l_list *list, struct l_item *tmp)
@@ -271,13 +280,49 @@ static void erase_line(struct l_list *line)
     GOTO_NTH_COL(1);
 }
 
+/* 
+  resetting delimiter means that after typing it, user expects the command
+  to be autocompleted rather than a filename
+*/
+static int is_resetting_delimiter(char c)
+{
+    return c == '&' || c == '|' || c == ';' || c == '(';
+}
+
+static int is_first_word(struct l_list *line)
+{
+    struct l_item *cur;
+    int cur_word_ended = 0;
+
+    for(cur = line->curp; cur; cur = cur->prev) {
+        if(!cur_word_ended && is_ws(cur->val)) {
+            cur_word_ended = 1;
+            continue;
+        }
+        if(cur_word_ended) {
+            if(is_resetting_delimiter(cur->val))
+                break;
+            if(!is_ws(cur->val))
+                return 0;
+        }
+    }
+    return 1;
+}
+
+static char *get_part_word(struct l_list *line)
+{
+}
+
 static void autocomplete(struct l_list *line)
 {
-   if(line->nth_word == 1) {
+    char *part_word;
 
-   } else {
-
-   }
+    part_word = get_part_word(line);
+    if(is_first_word(line)) {
+        printf("first");
+    } else {
+        printf("not_first");
+    }
 }
 
 static struct termios saveset, curset;
