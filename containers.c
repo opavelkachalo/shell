@@ -127,3 +127,11 @@ void l_list_free(struct l_list *list)
         free(tmp);
     }
 }
+
+void str_arr_free(struct str_arr *strs)
+{
+    int i;
+    for(i = 0; i < strs->size; i++)
+        free(strs->items[i]);
+    free(strs->items);
+}
