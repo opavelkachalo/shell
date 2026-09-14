@@ -73,5 +73,6 @@ struct str_arr {
 } while(0)
 
 void str_arr_free(struct str_arr *strs);
+void str_arr_sort(struct str_arr *strs, int asc);
 
 #endif /* _H_CONTAINERS_SENTRY_ */

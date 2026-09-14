@@ -1,5 +1,6 @@
 #include <stdio.h>
-#include <stdlib.h>
+#include <string.h>
+
 #include "containers.h"
 
 static void append_tmp_to_tail(struct l_list *list, struct l_item *tmp)
@@ -134,4 +135,31 @@ void str_arr_free(struct str_arr *strs)
     for(i = 0; i < strs->size; i++)
         free(strs->items[i]);
     free(strs->items);
+}
+
+static void swap_strs(char **s, int j)
+{
+    char *tmp = s[j];
+    s[j] = s[j+1];
+    s[j+1] = tmp;
+}
+
+static int should_swap(char * const *strs, int j, int asc)
+{
+    char *cur, *next;
+    cur = strs[j];
+    next = strs[j+1];
+    return (asc  && strcmp(cur, next) > 0) ||
+           (!asc && strcmp(cur, next) < 0);
+}
+
+void str_arr_sort(struct str_arr *strs, int asc)
+{
+    int i, j;
+    for(i = 0; i < strs->size; i++) {
+        for(j = 0; j < strs->size - i - 1; j++) {
+            if(should_swap(strs->items, j, asc))
+                swap_strs(strs->items, j);
+        }
+    }
 }
