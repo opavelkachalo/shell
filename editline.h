@@ -13,5 +13,8 @@
 #define CURSOR_FORWARD(n) do { printf("\033[%dC", (n)); } while(0)
 
 char *get_line();
+int is_delimiter(char c);
+int is_ws(char c);
+
 
 #endif

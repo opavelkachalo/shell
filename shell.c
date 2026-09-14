@@ -88,22 +88,11 @@ static void dstr_append(struct dyn_str *dstr, char c)
     (dstr->pos)++;
 }
 
-static int is_whitespace(char c)
-{
-    return c == ' ' || c == '\t';
-}
-
 static void add_word_to_wlist(struct dyn_str *dstr, struct word_list *wlist,
                               enum token_type t_type)
 {
     dstr_append(dstr, '\0');
     wlist_append(wlist, dstr->str, t_type);
-}
-
-static int is_delimiter(char c)
-{
-    return c == '&' || c == '>' || c == '<' || c == '|' || c == ';' ||
-           c == '(' || c == ')';
 }
 
 static int delimiter_len(char *c)
@@ -145,7 +134,7 @@ static struct word_item *tokenize_line(char *line, int *status)
     struct word_list wlist = { NULL, NULL };
     dstr_init(&dword, word_init_size);
     for(c = line; *c; c++) {
-        if(is_whitespace(*c) && !in_quots && is_word) {
+        if(is_ws(*c) && !in_quots && is_word) {
             add_word_to_wlist(&dword, &wlist, token_word);
             dstr_init(&dword, word_init_size);
             is_word = 0;
@@ -163,7 +152,7 @@ static struct word_item *tokenize_line(char *line, int *status)
                 in_quots = !in_quots;
             }
         } else {
-            if(!is_word && (!is_whitespace(*c) || in_quots))
+            if(!is_word && (!is_ws(*c) || in_quots))
                 is_word = 1;
             if(is_word)
                 dstr_append(&dword, *c);

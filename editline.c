@@ -1,20 +1,24 @@
+#include <assert.h>
+#include <dirent.h>
 #include <stdio.h>
-#include <termios.h>
-#include <string.h>
-#include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <termios.h>
+#include <unistd.h>
+
+#include "containers.h"
 #include "editline.h"
 
-/* #include <assert.h> */
+static int term_width, term_height;
+static struct winsize wsize;
 
 #define DEBUG_PRINT
 #ifdef DEBUG_PRINT
-# include <sys/ioctl.h>
 
-static int term_width;
-static char dbg_str[16];
 static int dbg_msg_len;
-static struct winsize w;
+static char dbg_str[16];
 
 static void debug_print(const char *msg, int msg_len)
 {
@@ -29,7 +33,7 @@ static void debug_print(const char *msg, int msg_len)
     printf("%s", msg);
     prev_len = msg_len;
 }
-#endif
+#endif /* DEBUG_PRINT */
 
 enum key {
     ctrl_a = 1,
@@ -41,6 +45,8 @@ enum key {
     ctrl_h = 8,
     ctrl_i,          /* horizontal tab */
     ctrl_j,          /* line feed ('\n') */
+    ctrl_k,          /* kill chars after curpos */
+    ctrl_l,          /* clear the screen */
     ctrl_n = 14,
     ctrl_p = 16,
     ctrl_u = 21,
@@ -92,6 +98,13 @@ static void move_forward(struct l_list *line)
     }
 }
 
+static void rewrite_line(struct l_list *line)
+{
+    CLEAR_N_CHARS(line->size);
+    l_list_print(line);
+    GOTO_NTH_COL(line->curpos);
+}
+
 static void del_char(struct l_list *line)
 {
     CLEAR_N_CHARS(line->size);
@@ -110,7 +123,7 @@ static void bs_char(struct l_list *line)
     GOTO_NTH_COL(line->curpos);
 }
 
-static int is_ws(char c)
+int is_ws(char c)
 {
     return c == ' ' || c == '\n' || c == '\t';
 }
@@ -137,12 +150,18 @@ static void erase_line(struct l_list *line)
 }
 
 /* 
-  resetting delimiter means that after typing it, user expects the command
+  special delimiter means that after typing it, user expects the command
   to be autocompleted rather than a filename
 */
-static int is_resetting_delimiter(char c)
+static int is_spec_delim(char c)
 {
     return c == '&' || c == '|' || c == ';' || c == '(';
+}
+
+int is_delimiter(char c)
+{
+    return c == '&' || c == '>' || c == '<' || c == '|' || c == ';' ||
+           c == '(' || c == ')';
 }
 
 static int is_first_word(struct l_list *line)
@@ -151,12 +170,12 @@ static int is_first_word(struct l_list *line)
     int cur_word_ended = 0;
 
     for(cur = line->curp; cur; cur = cur->prev) {
-        if(!cur_word_ended && is_ws(cur->val)) {
-            cur_word_ended = 1;
-            continue;
+        if(!cur_word_ended) {
+            if(is_ws(cur->val) || is_delimiter(cur->val))
+                cur_word_ended = 1;
         }
         if(cur_word_ended) {
-            if(is_resetting_delimiter(cur->val))
+            if(is_spec_delim(cur->val))
                 break;
             if(!is_ws(cur->val))
                 return 0;
@@ -165,20 +184,254 @@ static int is_first_word(struct l_list *line)
     return 1;
 }
 
-static char *get_part_word(struct l_list *line)
+static char *get_cur_word(struct l_list *line)
 {
+    struct l_item *cur;
+    struct d_str word;
+    int i;
+
+    DA_SET_TO_ZERO(&word);
+    for(cur = line->curp; cur; cur = cur->prev) {
+        if(is_ws(cur->val) || is_delimiter(cur->val)) {
+            break;
+        }
+        DA_APPEND(&word, cur->val);
+    }
+    for(i = 0; i < word.size / 2; i++) {
+        char tmp = word.items[i];
+        word.items[i] = word.items[word.size-i-1];
+        word.items[word.size-i-1] = tmp;
+    }
+    DA_APPEND(&word, '*');
+    DA_APPEND(&word, '\0');
+    return word.items;
+}
+
+static int str_contains(const char *str, char c)
+{
+    const char *p;
+    if(str) {
+        for(p = str; *p; p++) {
+            if(*p == c)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static int match(const char *str, const char *pat)
+{
+    int i;
+    if(!str || !pat)
+        return 0;
+    for(;; str++, pat++) {
+        switch(*pat) {
+        case 0:
+            return *str == 0;
+        case '*':
+            for(i = 0; ; i++) {
+                if(match(str+i, pat+1))
+                    return 1;
+                if(!str[i])
+                    return 0;
+            }
+        case '?':
+            if(!*str)
+                return 0;
+            break;
+        default:
+            if(*str != *pat)
+                return 0;
+        }
+    }
+}
+
+static int is_dir(const char *path)
+{
+    int res;
+    struct stat sb;
+    res = lstat(path, &sb);
+    if(res == -1)
+        return 0;
+    return (sb.st_mode & S_IFMT) == S_IFDIR;
+}
+
+static int is_dot_or_ddot(const char *path)
+{
+    return (0 == strcmp(path, ".") ||
+            0 == strcmp(path, ".."));
+}
+
+static char *str_concat(const char *s1, const char *s2)
+{
+    int len1, len2;
+    char *res;
+    len1 = strlen(s1);
+    len2 = strlen(s2);
+    res = calloc(len1 + len2 + 1, sizeof(*res));
+    memcpy(res, s1, len1);
+    memcpy(res+len1, s2, len2);
+    return res;
+}
+
+static char *str_dup_ext(const char *s, int slen, int extlen)
+{
+    char *res;
+    res = calloc(slen + extlen, sizeof(*res));
+    memcpy(res, s, slen);
+    return res;
+}
+
+static void search_matches(const char *where, const char *word,
+                           struct str_arr *matches)
+{
+    int len;
+    char *match_name, *full_path;
+    DIR *dirp;
+    struct dirent *dent;
+
+    dirp = opendir(where);
+    if(!dirp)
+        return;
+    while((dent = readdir(dirp)) != NULL) {
+        if(*word != '.' && is_dot_or_ddot(dent->d_name))
+            continue;
+        if(match(dent->d_name, word)) {
+            len = strlen(dent->d_name);
+            match_name = str_dup_ext(dent->d_name, len, 2);
+            full_path = str_concat(where, match_name);
+            if(is_dir(full_path))
+                match_name[len] = '/';
+            free(full_path);
+            DA_APPEND(matches, match_name);
+        }
+    }
+    str_arr_sort(matches, 1);
+    closedir(dirp);
+}
+
+/* `out' should be initialized */
+static void split_str(const char *str, char by, struct str_arr *out)
+{
+    const char *p;
+    struct d_str substr;
+
+    if(!str)
+        return;
+    DA_SET_TO_ZERO(&substr);
+    for(p = str; ; p++) {
+        if(!*p || *p == by) {
+            DA_APPEND(&substr, '\0');
+            DA_APPEND(out, substr.items);
+            if(!*p)
+                break;
+            DA_SET_TO_ZERO(&substr);
+            continue;
+        }
+        DA_APPEND(&substr, *p);
+    }
+}
+
+static char *get_path(const char *word)
+{
+    char *res, *pos, *p;
+    res = strdup(word);
+    pos = res;
+    for(p = res; *p; p++) {
+        if(*p == '/')
+            pos = p;
+    }
+    if(pos == res && *pos != '/') {
+        *pos = '.';
+        pos += 1;
+        *pos = '/';
+    }
+    pos[1] = '\0';
+    return res;
+}
+
+static void complete_chars(struct l_list *line, int idx, const char *match)
+{
+    const char *p;
+    for(p = match + idx; *p; p++) {
+        l_append(line, *p);
+    }
+}
+
+static void complete_n_chars(struct l_list *line, int idx, int n,
+                             const char *match)
+{
+    int i;
+    for(i = idx; i < idx + n; i++) {
+        l_append(line, match[i]);
+    }
+}
+
+static int common_substr(const char *word, struct str_arr *matches)
+{
+    int i, j, n_common;
+
+    n_common = 0;
+    for(i = strlen(word)-1; ; i++) {
+        char c = matches->items[0][i];
+        for(j = 1; j < matches->size; j++) {
+            if(matches->items[j][i] != c)
+                return n_common;
+        }
+        n_common++;
+    }
+}
+
+static void print_matches(struct str_arr *matches)
+{
+    int i;
+    putchar('\n');
+    for(i = 0; i < matches->size; i++)
+        printf("%s\n", matches->items[i]);
+}
+
+static void chop_path(char *word, char *path)
+{
+    int plen, wlen;
+    plen = strlen(path);
+    wlen = strlen(word);
+    memmove(word, word+plen, wlen-plen+1);
 }
 
 static void autocomplete(struct l_list *line)
 {
-    char *part_word;
+    char *word;
+    struct str_arr places, matches;
+    int i;
 
-    part_word = get_part_word(line);
-    if(is_first_word(line)) {
-        printf("first");
+    DA_SET_TO_ZERO(&places);
+    DA_SET_TO_ZERO(&matches);
+    word = get_cur_word(line);
+    if(is_first_word(line) && !str_contains(word, '/')) {
+        split_str(getenv("PATH"), ':', &places);
+        /* TODO: add builtins to the mathes array */
     } else {
-        printf("not_first");
+        char *path = get_path(word);
+        if(0 != strcmp(path, "./") || (word[0] == '.' && word[1] == '/'))
+            chop_path(word, path);
+        DA_APPEND(&places, path);
     }
+    for(i = 0; i < places.size; i++) {
+        search_matches(places.items[i], word, &matches);
+    }
+    if(matches.size == 1) {
+        complete_chars(line, strlen(word)-1, matches.items[0]);
+    } else if(matches.size > 1) {
+        int res = common_substr(word, &matches);
+        if(res)
+            complete_n_chars(line, strlen(word)-1, res, matches.items[0]);
+        else
+            print_matches(&matches);
+    }
+    rewrite_line(line);
+    free(word);
+    str_arr_free(&matches);
+    str_arr_free(&places);
 }
 
 static struct termios saveset, curset;
@@ -273,9 +526,7 @@ static char *edit_line()
             if(line.curp == line.tail) {
                 putchar(c);
             } else {
-                CLEAR_N_CHARS(line.size);
-                l_list_print(&line);
-                GOTO_NTH_COL(line.curpos);
+                rewrite_line(&line);
             }
         }
     }
@@ -287,36 +538,30 @@ end:
 
 char *get_line()
 {
-    int c, size, capacity;
-    char *res;
+    int c;
+    struct d_str str;
 
     if(isatty(0)) {
-#ifdef DEBUG_PRINT
-    if(ioctl(0, TIOCGWINSZ, &w) == 0)
-        term_width = w.ws_col;
-#endif
+        if(ioctl(0, TIOCGWINSZ, &wsize) == 0) {
+            term_width = wsize.ws_col;
+            term_height = wsize.ws_row;
+        }
         return edit_line();
     }
-    size = 0;
-    capacity = 0;
-    res = NULL;
+    DA_SET_TO_ZERO(&str);
     while((c = getchar()) != EOF) {
-        if(c == '\n')
-            c = '\0';
-        if(size == capacity) {
-            if(size == 0)
-                capacity = 1;
-            else
-                capacity *= 2;
-            res = realloc(res, capacity);
+        if(c == '\n') {
+            DA_APPEND(&str, '\0');
+            return str.items;
         }
-        res[size] = c;
-        size++;
+        DA_APPEND(&str, c);
     }
-    return res;
+    DA_APPEND(&str, '\0');
+    return str.items;
 }
-/* TODO: autocompletion */
 /* TODO: prompt */
 /* TODO: history */
 /* TODO: multiline strings */
 /* TODO: SIGWINCH handling */
+/* TODO: erasing chars with some keys should copy them to the internal
+         clipboard buffer */
