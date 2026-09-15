@@ -25,6 +25,7 @@ void l_delete(struct l_list *list);
 void l_backspace(struct l_list *list);
 void l_list_print(struct l_list *list);
 char *l_list_to_str(struct l_list *list);
+struct l_list *str_to_l_list(const char *str);
 void l_list_init(struct l_list *list);
 void l_list_free(struct l_list *list);
 

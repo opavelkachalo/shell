@@ -110,6 +110,18 @@ char *l_list_to_str(struct l_list *list)
     return str;
 }
 
+struct l_list *str_to_l_list(const char *str)
+{
+    const char *p;
+    struct l_list *list = malloc(sizeof(*list));
+
+    l_list_init(list);
+    for(p = str; *p; p++) {
+        l_append(list, *p);
+    }
+    return list;
+}
+
 void l_list_init(struct l_list *list)
 {
     list->head = NULL;

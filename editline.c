@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "containers.h"
 #include "editline.h"
@@ -102,7 +103,6 @@ static void rewrite_line(struct l_list *line)
 {
     CLEAR_N_CHARS(line->size);
     l_list_print(line);
-    GOTO_NTH_COL(line->curpos);
 }
 
 static void del_char(struct l_list *line)
@@ -258,8 +258,8 @@ static int is_dir(const char *path)
 
 static int is_dot_or_ddot(const char *path)
 {
-    return (0 == strcmp(path, ".") ||
-            0 == strcmp(path, ".."));
+    return (path[0] == '.' && path[1] == '\0') ||
+           (path[0] == '.' && path[1] == '.' && path[2] == '\0');
 }
 
 static char *str_concat(const char *s1, const char *s2)
@@ -434,6 +434,117 @@ static void autocomplete(struct l_list *line)
     str_arr_free(&places);
 }
 
+struct history hist = {0};
+
+static void read_hist_file()
+{
+    int fd, fd_bkp;
+    char *line;
+
+    fd = open(hist.hist_path, O_RDONLY);
+    if(fd == -1)
+        return;
+    fd_bkp = dup(0);
+    dup2(fd, 0);
+    close(fd);
+    while((line = get_line()) != NULL) {
+        DA_APPEND(&hist.list, line);
+    }
+    dup2(fd_bkp, 0);
+    close(fd_bkp);
+}
+
+void hist_init(const char *hist_path, int lines_limit)
+{
+    hist.available = 1;
+    hist.hist_path = hist_path;
+    hist.lines_limit = lines_limit;
+    if(hist.hist_path)
+        read_hist_file();
+    hist.cur_idx = hist.list.size;
+}
+
+static void write_history_file()
+{
+    int i, i_0;
+    FILE *f;
+
+    f = fopen(hist.hist_path, "w");
+    if(!f)
+        return;
+    i_0 = hist.list.size > hist.lines_limit ?
+          hist.list.size - hist.lines_limit : 0;
+    for(i = 0; i < hist.lines_limit; i++) {
+        if(i_0 + i == hist.list.size)
+            break;
+        fprintf(f, "%s\n", hist.list.items[i_0+i]);
+    }
+    fclose(f);
+}
+
+void hist_close()
+{
+    if(hist.hist_path)
+        write_history_file();
+    str_arr_free(&hist.list);
+}
+
+static void history_next(struct l_list *line)
+{
+    char *line_str;
+    struct l_list *next_line;
+
+    if(!hist.available || hist.cur_idx == hist.list.size)
+        return;
+    line_str = l_list_to_str(line);
+    free(hist.list.items[hist.cur_idx]);
+    hist.list.items[hist.cur_idx] = line_str;
+    CLEAR_N_CHARS(line->size);
+    l_list_free(line);
+    hist.cur_idx++;
+    next_line = str_to_l_list(hist.list.items[hist.cur_idx]);
+    memcpy(line, next_line, sizeof(*next_line));
+    free(next_line);
+    l_list_print(line);
+}
+
+static void history_prev(struct l_list *line)
+{
+    char *line_str;
+    struct l_list *prev_line;
+
+    if(!hist.available || hist.cur_idx == 0)
+        return;
+    line_str = l_list_to_str(line);
+    if(hist.cur_idx == hist.list.size && !hist.cycled_history) {
+        DA_APPEND(&hist.list, line_str);
+        hist.list.size--;
+        hist.cycled_history = 1;
+    } else {
+        free(hist.list.items[hist.cur_idx]);
+        hist.list.items[hist.cur_idx] = line_str;
+    }
+    CLEAR_N_CHARS(line->size);
+    l_list_free(line);
+    hist.cur_idx--;
+    prev_line = str_to_l_list(hist.list.items[hist.cur_idx]);
+    memcpy(line, prev_line, sizeof(*prev_line));
+    free(prev_line);
+    l_list_print(line);
+}
+
+void history_add(char *str)
+{
+    if(!hist.available)
+        return;
+    if(hist.cycled_history) {
+        free(hist.list.items[hist.list.size+1]);
+        hist.cycled_history = 0;
+    }
+    DA_APPEND(&hist.list, strdup(str));
+    hist.cur_idx = hist.list.size;
+}
+
 static struct termios saveset, curset;
 
 static void term_raw()
@@ -491,9 +602,6 @@ static char *edit_line()
         case backspace:
             bs_char(&line);
             break;
-        case EOF:
-            res = NULL;
-            goto end;
         case ctrl_d:
             if(line.size == 0) {
                 res = NULL;
@@ -516,10 +624,10 @@ static char *edit_line()
             res = l_list_to_str(&line);
             goto end;
         case ctrl_n:
-            /* history next */
+            history_next(&line);
             break;
         case ctrl_p:
-            /* history prev */
+            history_prev(&line);
             break;
         default:
             l_append(&line, c);
@@ -556,8 +664,7 @@ char *get_line()
         }
         DA_APPEND(&str, c);
     }
-    DA_APPEND(&str, '\0');
-    return str.items;
+    return NULL;
 }
 /* TODO: prompt */
 /* TODO: history */

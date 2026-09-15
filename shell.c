@@ -769,6 +769,8 @@ static void io_and_execmds()
     struct word_item *wlist;
     while((line = get_line()) != NULL) {
         int status;
+        if(line && *line)
+            history_add(line);
         /* TODO: env variables expansion; `*`, `?` patterns matching */
         wlist = tokenize_line(line, &status);
         if(status == code_succ && wlist)
@@ -789,7 +791,9 @@ int main()
     }
     signal(SIGCHLD, remove_zombies);
     signal(SIGTTOU, SIG_IGN);
+    hist_init(NULL, 0);
     io_and_execmds();
+    hist_close();
     close(session_tty_fd);
     return 0;
 }
