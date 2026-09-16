@@ -251,12 +251,10 @@ static void cd(char **argv)
 static int str_to_int(const char *str, int *ok)
 {
     int res = 0, sign = 0;
-    const char *p;
-    if(*str == '-') {
+    const char *p = str;
+    if(*str == '-' || *str == '+') {
         sign = 1;
-        p = str + 1;
-    } else {
-        p = str;
+        p++;
     }
     for(; *p; p++) {
         if(*p < '0' || *p > '9') {
@@ -272,26 +270,24 @@ static int str_to_int(const char *str, int *ok)
     return sign ? -res : res;
 }
 
+static int close_shell, exit_code;
+
 static void exit_cmd(char **argv)
 {
-    /* there is a minor memory leak caused by this function
-     * (wlist and cmd are not being released)
-     * but it's not a big deal, because program finishes here anyway */
-    int code, len, ok;
-    code = 0;
+    int len, ok;
     len = len_argv(argv);
     if(len > 2) {
         fprintf(stderr, "%s: exit: too many arguments\n", SELF_NAME);
         return;
     } else if(len == 2) {
-        code = str_to_int(argv[1], &ok);
+        exit_code = str_to_int(argv[1], &ok);
         if(!ok) {
             fprintf(stderr, "%s: exit: %s: numeric argument required\n",
                     SELF_NAME, argv[1]);
             return;
         }
     }
-    exit(code);
+    close_shell = 1;
 }
 
 static void run_builtin(char **argv)
@@ -779,7 +775,10 @@ static void io_and_execmds()
             print_error_msg(status);
         wlist_free(wlist);
         free(line);
+        if(close_shell)
+            break;
     }
+    printf("exit\n");
 }
 
 enum { hist_size = 512 };
@@ -806,7 +805,7 @@ int main()
     io_and_execmds();
     hist_close();
     close(session_tty_fd);
-    return 0;
+    return exit_code;
 }
 /* TODO: SIGHUP handling */
 /* TODO: jobs, fg, bg builtins */
