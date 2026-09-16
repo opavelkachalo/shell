@@ -438,20 +438,24 @@ struct history hist = {0};
 
 static void read_hist_file()
 {
-    int fd, fd_bkp;
-    char *line;
+    int c;
+    struct d_str line;
+    FILE *f;
 
-    fd = open(hist.hist_path, O_RDONLY);
-    if(fd == -1)
+    DA_SET_TO_ZERO(&line);
+    f = fopen(hist.hist_path, "r");
+    if(!f)
         return;
-    fd_bkp = dup(0);
-    dup2(fd, 0);
-    close(fd);
-    while((line = get_line()) != NULL) {
-        DA_APPEND(&hist.list, line);
+    while((c = fgetc(f)) != EOF) {
+        if(c == '\n') {
+            DA_APPEND(&line, '\0');
+            DA_APPEND(&hist.list, line.items);
+            DA_SET_TO_ZERO(&line);
+            continue;
+        }
+        DA_APPEND(&line, c);
     }
-    dup2(fd_bkp, 0);
-    close(fd_bkp);
+    fclose(f);
 }
 
 void hist_init(const char *hist_path, int lines_limit)
@@ -538,7 +542,7 @@ void history_add(char *str)
     if(!hist.available)
         return;
     if(hist.cycled_history) {
-        free(hist.list.items[hist.list.size+1]);
+        free(hist.list.items[hist.list.size]);
         hist.cycled_history = 0;
     }
     DA_APPEND(&hist.list, strdup(str));

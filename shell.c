@@ -782,8 +782,13 @@ static void io_and_execmds()
     }
 }
 
+enum { hist_size = 512 };
+char hist_buf[hist_size];
+
 int main()
 {
+    char *home_path;
+
     session_tty_fd = open("/dev/tty", O_RDWR);
     if(session_tty_fd == -1) {
         perror("/dev/tty");
@@ -791,7 +796,13 @@ int main()
     }
     signal(SIGCHLD, remove_zombies);
     signal(SIGTTOU, SIG_IGN);
-    hist_init(NULL, 0);
+    home_path = getenv("HOME");
+    if(!home_path) {
+        hist_init(NULL, 0);
+    } else {
+        snprintf(hist_buf, hist_size, "%s/.shell_history", home_path);
+        hist_init(hist_buf, 1000);
+    }
     io_and_execmds();
     hist_close();
     close(session_tty_fd);
