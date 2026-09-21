@@ -52,6 +52,7 @@ enum key {
     ctrl_p = 16,
     ctrl_u = 21,
     ctrl_w = 23,
+    escape = 27,
     backspace = 127,
     /*
      * TODO: alt_f  -- word forward
@@ -566,6 +567,29 @@ static void term_restore()
     tcsetattr(0, TCSANOW, &saveset);
 }
 
+static void process_esc_seq(struct l_list *line)
+{
+    char c;
+
+    getchar();  /* read '[' */
+    c = getchar();
+    switch(c) {
+    case 'A':  /* (up    arrow) = ^[[A */
+        history_prev(line);
+        break;
+    case 'B':  /* (down  arrow) = ^[[B */
+        history_next(line);
+        break;
+    case 'C':  /* (right arrow) = ^[[C */
+        move_forward(line);
+        break;
+    case 'D':  /* (left  arrow) = ^[[D */
+        move_back(line);
+        break;
+    default:
+    }
+}
+
 static char *edit_line()
 {
     int c;
@@ -632,6 +656,9 @@ static char *edit_line()
             break;
         case ctrl_p:
             history_prev(&line);
+            break;
+        case escape:
+            process_esc_seq(&line);
             break;
         default:
             l_append(&line, c);
